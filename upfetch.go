@@ -27,12 +27,16 @@ func getUpdateContent(Url string) (JSONData, error) {
 }
 
 func downloadFile(url, file string) error {
+	var symbols = []string{"|", "/", "-", "\\"}
+	var symbolIndex = 0
 	client := req.C()
 	//size := 100 * 1024 // 100 KB
 	//url = fmt.Sprintf("https://httpbin.org/bytes/%d", size)
 	callback := func(info req.DownloadInfo) {
 		if info.Response.Response != nil {
-			fmt.Printf("\r下载进度: %.2f%%", float64(info.DownloadedSize)/float64(info.Response.ContentLength)*100.0)
+			fmt.Printf("\r%s	下载进度: %.2f%%", symbols[symbolIndex], float64(info.DownloadedSize)/float64(info.Response.ContentLength)*100.0)
+			symbolIndex = (symbolIndex + 1) % len(symbols)
+
 		}
 		//fmt.Printf("文件名:%s,下载完成\n", info.Response.Header.)
 	}
