@@ -39,7 +39,6 @@ func getUpdateContent(Url string) (JSONData, error) {
 func downloadFile(url, file string) error {
 	var symbols = []string{"|", "/", "-", "\\"}
 	var symbolIndex = 0
-	client := req.C()
 	//size := 100 * 1024 // 100 KB
 	//url = fmt.Sprintf("https://httpbin.org/bytes/%d", size)
 	callback := func(info req.DownloadInfo) {
