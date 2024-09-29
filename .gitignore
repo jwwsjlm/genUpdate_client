@@ -1,3 +1,6 @@
 /星月
 /.idea
 /星月/*.exe
+/Makefile
+/build/*.exe
+/build

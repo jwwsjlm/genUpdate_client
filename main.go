@@ -6,7 +6,8 @@ import (
 )
 
 const baseURL = "https://up.975135.xyz"
-const appname = "星月"
+
+var appName string
 
 func main() {
 	defer func() {
@@ -16,7 +17,7 @@ func main() {
 		fmt.Scanln(&input)
 	}()
 
-	content, err := getUpdateContent(baseURL + "/updateList/" + appname)
+	content, err := getUpdateContent(baseURL + "/updateList/" + appName)
 	if err != nil {
 		fmt.Println("访问失败", err)
 		return
@@ -27,13 +28,13 @@ func main() {
 		return
 
 	}
-	fmt.Printf("软件名称:%s \r\n", content.AppList.FileName)
-	fmt.Printf("软件公告:%s \r\n", content.AppList.ReleaseNote.Description)
-	fmt.Printf("软件版本:%s \r\n", content.AppList.ReleaseNote.Version)
+	fmt.Printf("软件名称:%s \n", content.AppList.ReleaseNote.AppName)
+	fmt.Printf("软件公告:%s \n", content.AppList.ReleaseNote.Description)
+	fmt.Printf("软件版本:%s \n", content.AppList.ReleaseNote.Version)
 
 	for _, v := range content.AppList.FileList {
 		downloadURL := baseURL + v.DownloadURL
-		relativePath, err := extractRelativePath(v.Path, appname)
+		relativePath, err := extractRelativePath(v.Path, appName)
 		if err != nil {
 			fmt.Println("解析路径出错:", err)
 			continue

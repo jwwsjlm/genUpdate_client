@@ -11,6 +11,7 @@ import (
 
 var once sync.Once
 var client *req.Client
+var symbols = []string{"|", "/", "-", "\\"}
 
 func init() {
 	once.Do(func() {
@@ -37,7 +38,6 @@ func getUpdateContent(Url string) (JSONData, error) {
 }
 
 func downloadFile(url, file string) error {
-	var symbols = []string{"|", "/", "-", "\\"}
 	var symbolIndex = 0
 	//size := 100 * 1024 // 100 KB
 	//url = fmt.Sprintf("https://httpbin.org/bytes/%d", size)
