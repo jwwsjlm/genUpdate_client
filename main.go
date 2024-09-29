@@ -32,6 +32,7 @@ func main() {
 	fmt.Printf("软件版本:%s \r\n", content.AppList.ReleaseNote.Version)
 
 	for _, v := range content.AppList.FileList {
+		downloadURL := baseURL + v.DownloadURL
 		relativePath, err := extractRelativePath(v.Path, appname)
 		if err != nil {
 			fmt.Println("解析路径出错:", err)
@@ -48,7 +49,7 @@ func main() {
 		}
 
 		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n")
-		err = downloadFile(baseURL+v.DownloadURL, relativePath)
+		err = downloadFile(downloadURL, relativePath)
 		if err != nil {
 			fmt.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
 			continue

@@ -5,6 +5,7 @@ import (
 	"github.com/imroc/req/v3"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func getUpdateContent(Url string) (JSONData, error) {
@@ -43,7 +44,7 @@ func downloadFile(url, file string) error {
 
 	_, err := client.R().
 		SetOutputFile(file).
-		SetDownloadCallback(callback).
+		SetDownloadCallbackWithInterval(callback, 50*time.Millisecond).
 		Get(url)
 	if err != nil {
 		return err
