@@ -1,23 +1,26 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/duke-git/lancet/v2/fileutil"
 )
 
-const baseURL = "https://up.975135.xyz"
+var baseURL string
 
 var appName string
 
 func main() {
+	flag.StringVar(&baseURL, "url", "", "你的域名")
+	flag.StringVar(&appName, "name", "", "你的软件名称")
 	defer func() {
 		fmt.Println("====================================================================")
 		fmt.Println("程序运行完毕，按 Enter 键以退出...")
 		var input string
 		fmt.Scanln(&input)
 	}()
-	if appName == "" {
-		fmt.Println("appName 未设置，请设置后再运行程序。")
+	if appName == "" || baseURL == "" {
+		fmt.Println("appName,baseURL 未设置，请设置后再运行程序。")
 		return
 	}
 	content, err := getUpdateContent(baseURL + "/updateList/" + appName)
