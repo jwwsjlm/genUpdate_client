@@ -32,7 +32,7 @@ func main() {
 	fmt.Printf("软件版本:%s \r\n", content.AppList.ReleaseNote.Version)
 
 	for _, v := range content.AppList.FileList {
-		relativePath, err := EXTRACT_RELATIVE_PATH(v.Path, appname)
+		relativePath, err := extractRelativePath(v.Path, appname)
 		if err != nil {
 			fmt.Println("解析路径出错:", err)
 			continue

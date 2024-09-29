@@ -51,7 +51,7 @@ func downloadFile(url, file string) error {
 	return nil
 
 }
-func EXTRACT_RELATIVE_PATH(fullPath, baseDir string) (string, error) {
+func extractRelativePath(fullPath, baseDir string) (string, error) {
 	// Normalize paths
 	fullPath = filepath.Clean(fullPath)
 	baseDir = filepath.Clean(baseDir)
