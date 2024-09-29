@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"github.com/duke-git/lancet/v2/fileutil"
-	"log"
 )
 
 const baseURL = "https://up.975135.xyz"
@@ -39,7 +38,7 @@ func main() {
 		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n")
 		err = downloadFile(baseURL+v.DownloadURL, relativePath)
 		if err != nil {
-			log.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
+			fmt.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
 			continue
 
 		}
