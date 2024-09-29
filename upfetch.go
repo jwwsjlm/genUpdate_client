@@ -55,7 +55,7 @@ func downloadFile(url, file string) error {
 		SetDownloadCallbackWithInterval(callback, 50*time.Millisecond).
 		Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to download file from %s: %w", url, err)
 	}
 	return nil
 
