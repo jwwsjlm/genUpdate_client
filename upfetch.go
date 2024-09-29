@@ -5,12 +5,21 @@ import (
 	"github.com/imroc/req/v3"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
+var once sync.Once
+var client *req.Client
+
+func init() {
+	once.Do(func() {
+		client = req.C()
+	})
+
+}
 func getUpdateContent(Url string) (JSONData, error) {
 
-	client := req.C()
 	resp, err := client.R().Get(Url)
 	if err != nil {
 		return JSONData{}, err
