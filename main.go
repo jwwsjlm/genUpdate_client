@@ -22,8 +22,13 @@ func main() {
 	fmt.Printf("软件版本:%s \r\n", content.AppList.ReleaseNote.Version)
 
 	for _, v := range content.AppList.FileList {
-		if fileutil.IsExist(v.Path) {
-			sha, _ := fileutil.Sha(v.Path, 256)
+		relativePath, err := EXTRACT_RELATIVE_PATH(v.Path, "星月")
+		if err != nil {
+			fmt.Println("解析路径出错:", err)
+			continue
+		}
+		if fileutil.IsExist(relativePath) {
+			sha, _ := fileutil.Sha(relativePath, 256)
 			if sha == v.Sha256 {
 				fmt.Printf("文件名:%s,已存在,且本地和云版本sha256一致\n", v.Name)
 				continue
@@ -32,7 +37,7 @@ func main() {
 		}
 
 		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n")
-		err := downloadFile(baseURL+v.DownloadURL, v.Path)
+		err = downloadFile(baseURL+v.DownloadURL, relativePath)
 		if err != nil {
 			log.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
 			continue

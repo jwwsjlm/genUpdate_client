@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"github.com/imroc/req/v3"
+	"path/filepath"
+	"strings"
 )
 
 func getUpdateContent(Url string) (JSONData, error) {
@@ -44,4 +46,22 @@ func downloadFile(url, file string) error {
 	}
 	return nil
 
+}
+func EXTRACT_RELATIVE_PATH(fullPath, baseDir string) (string, error) {
+	// Normalize paths
+	fullPath = filepath.Clean(fullPath)
+	baseDir = filepath.Clean(baseDir)
+
+	// Use filepath.Rel to get the relative path
+	relPath, err := filepath.Rel(baseDir, fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract relative path: %w", err)
+	}
+
+	// Check if the path starts with ".." which means baseDir is not a prefix of fullPath
+	if strings.HasPrefix(relPath, "..") {
+		return "", fmt.Errorf("base directory is not a prefix of the full path")
+	}
+
+	return relPath, nil
 }
