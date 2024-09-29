@@ -16,7 +16,10 @@ func main() {
 		var input string
 		fmt.Scanln(&input)
 	}()
-
+	if appName == "" {
+		fmt.Println("appName 未设置，请设置后再运行程序。")
+		return
+	}
 	content, err := getUpdateContent(baseURL + "/updateList/" + appName)
 	if err != nil {
 		fmt.Println("访问失败", err)
@@ -41,12 +44,16 @@ func main() {
 		}
 		fmt.Println("--------------------------------------------------------------------")
 		if fileutil.IsExist(relativePath) {
-			sha, _ := fileutil.Sha(relativePath, 256)
-			if sha == v.Sha256 {
+			sha, err := fileutil.Sha(relativePath, 256)
+			if err != nil {
+				fmt.Printf("计算 SHA256 错误:%s,重新下载\n", err)
+			} else if sha != v.Sha256 {
+				fmt.Printf("文件名:%s,	已存在,本地和云端不一致,准备下载\n", v.Name)
+			} else {
 				fmt.Printf("文件名:%s,	已存在,且本地和云版本sha256一致\n", v.Name)
 				continue
 			}
-			fmt.Printf("文件名:%s,	已存在,本地和云端不一致,准备下载\n", v.Name)
+
 		}
 
 		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n")

@@ -23,7 +23,7 @@ func getUpdateContent(Url string) (JSONData, error) {
 
 	resp, err := client.R().Get(Url)
 	if err != nil {
-		return JSONData{}, err
+		return JSONData{}, fmt.Errorf("failed to send request: %w", err)
 	}
 	if !resp.IsSuccessState() {
 		return JSONData{}, fmt.Errorf("request failed with status code: %d", resp.StatusCode)
