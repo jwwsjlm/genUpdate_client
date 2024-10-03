@@ -4,6 +4,7 @@ go 1.23.1
 
 require (
 	github.com/duke-git/lancet/v2 v2.3.2
+	github.com/dustin/go-humanize v1.0.1
 	github.com/imroc/req/v3 v3.46.1
 )
 
@@ -11,7 +12,7 @@ require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/cloudflare/circl v1.4.0 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
-	github.com/google/pprof v0.0.0-20240927233043-f3f46ee36851 // indirect
+	github.com/google/pprof v0.0.0-20241001023024-f4c0cfd0cf1d // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/klauspost/compress v1.17.10 // indirect

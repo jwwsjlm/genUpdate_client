@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/dustin/go-humanize"
 	"github.com/imroc/req/v3"
 	"path/filepath"
 	"strings"
@@ -20,15 +21,13 @@ func init() {
 
 }
 func getUpdateContent(Url string) (JSONData, error) {
-
 	resp, err := client.R().Get(Url)
 	if err != nil {
-		return JSONData{}, fmt.Errorf("failed to send request: %w", err)
+		return JSONData{}, fmt.Errorf("failed to send request: %w,Url:%s", err, Url)
 	}
 	if !resp.IsSuccessState() {
-		return JSONData{}, fmt.Errorf("request failed with status code: %d", resp.StatusCode)
+		return JSONData{}, fmt.Errorf("request failed with status code: %d,Url:%s", resp.StatusCode, Url)
 	}
-
 	var data JSONData
 	err = resp.UnmarshalJson(&data)
 	if err != nil {
@@ -41,9 +40,14 @@ func downloadFile(url, file string) error {
 	var symbolIndex = 0
 	//size := 100 * 1024 // 100 KB
 	//url = fmt.Sprintf("https://httpbin.org/bytes/%d", size)
+	//开始时间
+	startTime := time.Now()
 	callback := func(info req.DownloadInfo) {
 		if info.Response.Response != nil {
-			fmt.Printf("\r%s	下载进度: %.2f%%", symbols[symbolIndex], float64(info.DownloadedSize)/float64(info.Response.ContentLength)*100.0)
+			progress := float64(info.DownloadedSize) / float64(info.Response.ContentLength) * 100.0
+			elapsedTime := time.Since(startTime).Seconds()
+			downloadSpeed := float64(info.DownloadedSize) / elapsedTime
+			fmt.Printf("\r%s 下载进度: %.2f%%, 下载速度: %s /s", symbols[symbolIndex], progress, humanize.Bytes(uint64(downloadSpeed)))
 			symbolIndex = (symbolIndex + 1) % len(symbols)
 
 		}

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/duke-git/lancet/v2/fileutil"
+	"github.com/dustin/go-humanize"
 )
 
 var baseURL string
@@ -11,14 +12,20 @@ var baseURL string
 var appName string
 
 func main() {
-	flag.StringVar(&baseURL, "url", "", "你的域名")
-	flag.StringVar(&appName, "name", "", "你的软件名称")
+
 	defer func() {
 		fmt.Println("====================================================================")
 		fmt.Println("程序运行完毕，按 Enter 键以退出...")
 		var input string
 		fmt.Scanln(&input)
 	}()
+	if appName == "" || baseURL == "" {
+		flag.StringVar(&baseURL, "url", "", "你的域名")
+		flag.StringVar(&appName, "name", "", "你的软件名称")
+		flag.Parse()
+		fmt.Println("appName,baseURL 未设置，请设置后再运行程序。")
+		return
+	}
 	if appName == "" || baseURL == "" {
 		fmt.Println("appName,baseURL 未设置，请设置后再运行程序。")
 		return
@@ -59,7 +66,7 @@ func main() {
 
 		}
 
-		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n")
+		fmt.Print("开始下载文件:" + v.Name + "\n" + "文件sha256:" + v.Sha256 + "\n" + "文件大小:" + humanize.Bytes(uint64(v.Size)) + "\n")
 		err = downloadFile(downloadURL, relativePath)
 		if err != nil {
 			fmt.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
