@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/dustin/go-humanize"
 	"github.com/imroc/req/v3"
+	"github.com/k0kubun/go-ansi"
+	"github.com/schollz/progressbar/v3"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,19 +37,36 @@ func getUpdateContent(Url string) (JSONData, error) {
 	return data, nil
 }
 
-func downloadFile(url, file string) error {
-	var symbolIndex = 0
-	//size := 100 * 1024 // 100 KB
-	//url = fmt.Sprintf("https://httpbin.org/bytes/%d", size)
+func downloadFile(url, file string, size int64) error {
+	//bar := progressbar.DefaultBytes(size)
+	bar := progressbar.NewOptions64(size,
+		progressbar.OptionSetWriter(ansi.NewAnsiStdout()), //you should install "github.com/k0kubun/go-ansi"
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(20),
+		progressbar.OptionSetSpinnerChangeInterval(0),
+		progressbar.OptionSetPredictTime(true),
+		//progressbar.OptionSetRenderBlankState(true),
+		//progressbar.RenderBlank(),
+		progressbar.OptionSetDescription("正在下载:["+filepath.Base(file)+"]..."),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[red]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+	)
+	bar.Reset()
 	//开始时间
-	startTime := time.Now()
+	//startTime := time.Now()
 	callback := func(info req.DownloadInfo) {
 		if info.Response.Response != nil {
-			progress := float64(info.DownloadedSize) / float64(info.Response.ContentLength) * 100.0
-			elapsedTime := time.Since(startTime).Seconds()
-			downloadSpeed := float64(info.DownloadedSize) / elapsedTime
-			fmt.Printf("\r%s 下载进度: %.2f%%, 下载速度: %s /s", symbols[symbolIndex], progress, humanize.Bytes(uint64(downloadSpeed)))
-			symbolIndex = (symbolIndex + 1) % len(symbols)
+			//progress := float64(info.DownloadedSize) / float64(info.Response.ContentLength) * 100.0
+			//elapsedTime := time.Since(startTime).Seconds()
+			//downloadSpeed := float64(info.DownloadedSize) / elapsedTime
+			bar.Set64(info.DownloadedSize)
+			//fmt.Printf("\r%s 下载进度: %.2f%%, 下载速度: %s /s", symbols[symbolIndex], progress, humanize.Bytes(uint64(downloadSpeed)))
 
 		}
 		//fmt.Printf("文件名:%s,下载完成\n", info.Response.Header.)
@@ -56,11 +74,12 @@ func downloadFile(url, file string) error {
 
 	_, err := client.R().
 		SetOutputFile(file).
-		SetDownloadCallbackWithInterval(callback, 50*time.Millisecond).
+		SetDownloadCallbackWithInterval(callback, 100*time.Millisecond).
 		Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to download file from %s: %w", url, err)
 	}
+	bar.Finish()
 	return nil
 
 }

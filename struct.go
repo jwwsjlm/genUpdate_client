@@ -12,7 +12,7 @@ type ReleaseNote struct {
 type FileList struct {
 	Path        string `json:"path"`
 	Name        string `json:"name"`
-	Size        int    `json:"size"`
+	Size        int64  `json:"size"`
 	Sha256      string `json:"sha256"`
 	DownloadURL string `json:"downloadURL"`
 }
