@@ -36,10 +36,8 @@ func getUpdateContent(Url string) (JSONData, error) {
 	}
 	return data, nil
 }
-
-func downloadFile(url, file string, size int64) error {
-	//bar := progressbar.DefaultBytes(size)
-	bar := progressbar.NewOptions64(size,
+func NewProgressBar(size int64, file string) *progressbar.ProgressBar {
+	return progressbar.NewOptions64(size,
 		progressbar.OptionSetWriter(ansi.NewAnsiStdout()), //you should install "github.com/k0kubun/go-ansi"
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionShowBytes(true),
@@ -48,7 +46,7 @@ func downloadFile(url, file string, size int64) error {
 		progressbar.OptionSetPredictTime(true),
 		//progressbar.OptionSetRenderBlankState(true),
 		//progressbar.RenderBlank(),
-		progressbar.OptionSetDescription("正在下载:["+filepath.Base(file)+"]..."),
+		progressbar.OptionSetDescription("正在下载:[yellow]["+filepath.Base(file)+"]...[reset]"),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "[green]=[reset]",
 			SaucerHead:    "[red]>[reset]",
@@ -57,6 +55,13 @@ func downloadFile(url, file string, size int64) error {
 			BarEnd:        "]",
 		}),
 	)
+
+}
+func downloadFile(url, file string, size int64) error {
+	//bar := progressbar.DefaultBytes(size)
+	//创建进度条
+	bar := NewProgressBar(size, file)
+	//每次开始重置进度条
 	bar.Reset()
 	//开始时间
 	//startTime := time.Now()
