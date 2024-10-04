@@ -36,8 +36,10 @@ func getUpdateContent(Url string) (JSONData, error) {
 	}
 	return data, nil
 }
+
+// NewProgressBar 创建一个进度条用于显示下载进度
 func NewProgressBar(size int64, file string) *progressbar.ProgressBar {
-	return progressbar.NewOptions64(size,
+	b := progressbar.NewOptions64(size,
 		progressbar.OptionSetWriter(ansi.NewAnsiStdout()), //you should install "github.com/k0kubun/go-ansi"
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionShowBytes(true),
@@ -55,14 +57,21 @@ func NewProgressBar(size int64, file string) *progressbar.ProgressBar {
 			BarEnd:        "]",
 		}),
 	)
+	//每次创建完毕 初始化进度条参数
+	b.Reset()
+	return b
 
 }
+
+// 开始下载文件
 func downloadFile(url, file string, size int64) error {
 	//bar := progressbar.DefaultBytes(size)
 	//创建进度条
 	bar := NewProgressBar(size, file)
-	//每次开始重置进度条
-	bar.Reset()
+	//结束填充进度条
+	defer func() {
+		bar.Finish()
+	}()
 	//开始时间
 	//startTime := time.Now()
 	callback := func(info req.DownloadInfo) {
@@ -84,7 +93,6 @@ func downloadFile(url, file string, size int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to download file from %s: %w", url, err)
 	}
-	bar.Finish()
 	return nil
 
 }

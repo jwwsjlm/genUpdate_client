@@ -6,6 +6,8 @@ require (
 	github.com/duke-git/lancet/v2 v2.3.2
 	github.com/dustin/go-humanize v1.0.1
 	github.com/imroc/req/v3 v3.46.1
+	github.com/k0kubun/go-ansi v0.0.0-20180517002512-3bf9e2903213
+	github.com/schollz/progressbar/v3 v3.16.1
 )
 
 require (
@@ -15,7 +17,6 @@ require (
 	github.com/google/pprof v0.0.0-20241001023024-f4c0cfd0cf1d // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/k0kubun/go-ansi v0.0.0-20180517002512-3bf9e2903213 // indirect
 	github.com/klauspost/compress v1.17.10 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
@@ -24,7 +25,6 @@ require (
 	github.com/quic-go/quic-go v0.47.0 // indirect
 	github.com/refraction-networking/utls v1.6.7 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/schollz/progressbar/v3 v3.16.0 // indirect
 	go.uber.org/mock v0.4.0 // indirect
 	golang.org/x/crypto v0.27.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
