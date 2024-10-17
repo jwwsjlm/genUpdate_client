@@ -7,6 +7,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"os"
 	"strings"
+	"time"
 )
 
 var baseURL string
@@ -17,7 +18,15 @@ func main() {
 
 	defer func() {
 		fmt.Println("====================================================================")
-		fmt.Println("程序运行完毕，按 Enter 键以退出...")
+		fmt.Println("程序运行完毕，倒计时 5 秒后退出...")
+
+		// 倒计时
+		for i := 5; i > 0; i-- {
+			fmt.Printf("\r%d 秒后退出...", i)
+			time.Sleep(1 * time.Second)
+		}
+
+		fmt.Println("\n按 Enter 键以退出...")
 		var input string
 		fmt.Scanln(&input)
 	}()

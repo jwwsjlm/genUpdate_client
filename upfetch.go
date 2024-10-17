@@ -21,6 +21,7 @@ func init() {
 	})
 
 }
+
 func getUpdateContent(Url string) (JSONData, error) {
 	resp, err := client.R().Get(Url)
 	if err != nil {
@@ -65,12 +66,15 @@ func NewProgressBar(size int64, file string) *progressbar.ProgressBar {
 
 // 开始下载文件
 func downloadFile(url, file string, size int64) error {
+	var err error
 	//bar := progressbar.DefaultBytes(size)
 	//创建进度条
 	bar := NewProgressBar(size, file)
 	//结束填充进度条
 	defer func() {
-		bar.Finish()
+		if cerr := bar.Finish(); cerr != nil {
+			err = fmt.Errorf("failed to finish progress bar: %w", cerr)
+		}
 	}()
 	//开始时间
 	//startTime := time.Now()
@@ -86,14 +90,14 @@ func downloadFile(url, file string, size int64) error {
 		//fmt.Printf("文件名:%s,下载完成\n", info.Response.Header.)
 	}
 
-	_, err := client.R().
+	_, err = client.R().
 		SetOutputFile(file).
 		SetDownloadCallbackWithInterval(callback, 100*time.Millisecond).
 		Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to download file from %s: %w", url, err)
 	}
-	return nil
+	return err
 
 }
 func extractRelativePath(fullPath, baseDir string) (string, error) {
