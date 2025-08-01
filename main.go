@@ -38,7 +38,7 @@ func main() {
 		return
 	}
 	if appName == "" || baseURL == "" {
-		fmt.Println("appName,baseURL 未设置，请设置后再运行程序。")
+		fmt.Println("appName,baseURL 未设置，请设置后再运行程序。", appName, baseURL, "地址")
 		return
 	}
 	content, err := getUpdateContent(baseURL + "/updateList/" + appName)
