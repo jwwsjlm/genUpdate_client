@@ -11,9 +11,10 @@
 ## ✨ 功能特性
 
 - 🔄 **自动更新** - 自动检测并更新到最新版本
-- 🔐 **SHA256 校验** - 确保下载文件完整性
-- 📊 **版本同步** - 与服务端版本保持一致
-- 🛠️ **易于集成** - 简单配置即可使用
+- 🔐 **SHA256 校验** - 下载前比对本地文件，下载后再次校验完整性
+- 🧱 **原子替换** - 先下载到临时文件，再覆盖正式文件
+- 🛠️ **易于集成** - 简单参数即可接入
+- 🤖 **支持自动模式** - 支持无交互运行
 
 ---
 
@@ -35,22 +36,23 @@ go build -o genUpdate_client .
 
 ## 📖 使用说明
 
-### 配置
-
-修改源码中的配置：
-
-```go
-// 服务端地址
-baseURL := "http://your-server.com"
-
-// 应用名称
-appName := "你的软件名"
-```
-
-### 运行
+### 命令行参数
 
 ```bash
-./genUpdate_client
+./genUpdate_client -url http://your-server.com:8090 -name 你的软件名
+```
+
+### 常用参数
+
+- `-url`：服务端地址
+- `-name`：应用名称
+- `-y`：自动确认更新，无需交互
+- `-no-wait`：程序结束后立即退出
+
+### 自动模式示例
+
+```bash
+./genUpdate_client -url http://localhost:8090 -name 星月 -y -no-wait
 ```
 
 ---
@@ -63,46 +65,42 @@ appName := "你的软件名"
 - 版本管理
 - 文件存储
 - SHA256 校验
-- 临时下载链接
+- 稳定下载链接
 
 ---
 
-## 💡 自定义下载器
+## 💡 更新流程
 
-如果你想自己实现下载器，核心逻辑如下：
-
-```go
-// 1. 获取版本信息
-resp := http.Get(baseURL + "/updateList/" + appName)
-data := parseJSON(resp)
-
-// 2. 对比本地文件 SHA256
-localSHA256 := calculateSHA256(localFile)
-if localSHA256 != data.fileList[i].sha256 {
-    // 3. 下载更新
-    downloadURL := baseURL + data.fileList[i].downloadURL
-    downloadFile(downloadURL)
-}
-```
+1. 获取版本清单：`/updateList/{appName}`
+2. 对比本地文件 SHA256
+3. 下载缺失或变更文件到临时文件
+4. 校验下载文件 SHA256
+5. 原子替换正式文件
 
 ---
 
-## 📸 示例
+## 📸 响应示例
 
-### 服务端示例
+访问：`http://localhost:8090/updateList/星月`
 
-访问：http://up.975135.xyz/updateList/星月
-
-**响应示例：**
 ```json
 {
   "appList": {
     "fileName": "星月",
     "ReleaseNote": {
       "appName": "星月",
+      "description": "更新说明",
       "version": "1.0.0"
     },
-    "fileList": [...]
+    "fileList": [
+      {
+        "path": "星月/qqwry.dat",
+        "name": "qqwry.dat",
+        "size": 123456,
+        "sha256": "...",
+        "downloadURL": "/download/星月/qqwry.dat"
+      }
+    ]
   },
   "ret": "ok"
 }
@@ -110,24 +108,9 @@ if localSHA256 != data.fileList[i].sha256 {
 
 ---
 
-## 🛠️ 技术栈
-
-- **语言:** Go
-- **校验:** SHA256
-- **协议:** HTTP/HTTPS
-
----
-
 ## 📄 许可证
 
 MIT License
-
----
-
-## 📬 联系方式
-
-- GitHub: [@jwwsjlm](https://github.com/jwwsjlm)
-- 博客：https://blog.xsojson.com
 
 ---
 
