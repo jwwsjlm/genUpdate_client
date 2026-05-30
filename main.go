@@ -21,12 +21,14 @@ var configPath string
 var targetProcess string
 var updateToken string
 var processWaitTimeout time.Duration
+var concurrency int
 
 type clientConfig struct {
 	BaseURL                   string `json:"url"`
 	AppName                   string `json:"name"`
 	Token                     string `json:"token"`
 	ProcessName               string `json:"process"`
+	Concurrency               int    `json:"concurrency"`
 	AutoYes                   *bool  `json:"autoYes"`
 	SkipWait                  *bool  `json:"noWait"`
 	ProcessWaitTimeoutSeconds int    `json:"waitProcessTimeoutSeconds"`
@@ -41,6 +43,7 @@ func init() {
 	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
 	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "等待目标进程退出的最长时间，例如: 2m；0 表示一直等待")
+	flag.IntVar(&concurrency, "concurrency", 1, "并发下载数量，1 表示顺序下载")
 }
 
 func main() {
@@ -59,6 +62,7 @@ func main() {
 		Token:              updateToken,
 		ProcessName:        targetProcess,
 		WaitProcessTimeout: processWaitTimeout,
+		Concurrency:        concurrency,
 		Writer:             os.Stdout,
 		Progress:           true,
 	})
@@ -163,6 +167,9 @@ func applyConfig(path string) error {
 	}
 	if cfg.ProcessName != "" && !flagProvided("process") {
 		targetProcess = cfg.ProcessName
+	}
+	if cfg.Concurrency > 0 && !flagProvided("concurrency") {
+		concurrency = cfg.Concurrency
 	}
 	if cfg.AutoYes != nil && !flagProvided("y") {
 		autoYes = *cfg.AutoYes

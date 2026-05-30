@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -23,6 +25,7 @@ type Options struct {
 	Token              string
 	ProcessName        string
 	WaitProcessTimeout time.Duration
+	Concurrency        int
 	Writer             io.Writer
 	Progress           bool
 }
@@ -33,6 +36,7 @@ type Client struct {
 	token              string
 	processName        string
 	waitProcessTimeout time.Duration
+	concurrency        int
 	writer             io.Writer
 	progress           bool
 	http               *req.Client
@@ -59,6 +63,10 @@ func New(options Options) (*Client, error) {
 	if writer == nil {
 		writer = io.Discard
 	}
+	concurrency := options.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
 
 	return &Client{
 		baseURL:            strings.TrimSpace(options.BaseURL),
@@ -66,6 +74,7 @@ func New(options Options) (*Client, error) {
 		token:              strings.TrimSpace(options.Token),
 		processName:        strings.TrimSpace(options.ProcessName),
 		waitProcessTimeout: options.WaitProcessTimeout,
+		concurrency:        concurrency,
 		writer:             writer,
 		progress:           options.Progress,
 		http: req.C().
@@ -122,6 +131,10 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 		defer fileBar.Finish()
 	}
 
+	if c.concurrency > 1 {
+		return c.updateConcurrent(ctx, files, result, fileBar)
+	}
+
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -147,6 +160,65 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 		return result, UpdateError{Failures: result.Failed}
 	}
 	return result, nil
+}
+
+func (c *Client) updateConcurrent(ctx context.Context, files []File, result Result, fileBar *progressbar.ProgressBar) (Result, error) {
+	workerCount := c.concurrency
+	if workerCount > len(files) {
+		workerCount = len(files)
+	}
+	if workerCount < 1 {
+		workerCount = 1
+	}
+
+	jobs := make(chan File)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for file := range jobs {
+				if err := ctx.Err(); err != nil {
+					mu.Lock()
+					result.Failed = append(result.Failed, FileError{File: file, Err: err})
+					addProgress(fileBar)
+					mu.Unlock()
+					continue
+				}
+
+				action, err := c.updateFile(ctx, file)
+				mu.Lock()
+				if err != nil {
+					result.Failed = append(result.Failed, FileError{File: file, Err: err})
+					c.printf("文件下载失败: %s, 错误: %v\n", file.Name, err)
+				} else if action == fileDownloaded {
+					result.Downloaded++
+				} else {
+					result.Skipped++
+				}
+				addProgress(fileBar)
+				mu.Unlock()
+			}
+		}()
+	}
+
+sendJobs:
+	for _, file := range files {
+		select {
+		case <-ctx.Done():
+			break sendJobs
+		case jobs <- file:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	if len(result.Failed) > 0 {
+		return result, UpdateError{Failures: result.Failed}
+	}
+	return result, ctx.Err()
 }
 
 func (c *Client) updateFile(ctx context.Context, file File) (fileAction, error) {
@@ -190,36 +262,19 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 	}
 
 	tmpFile := file + ".tmp"
-	bar := c.newDownloadProgressBar(size, file)
-	if bar != nil {
-		defer func() {
-			if cerr := bar.Finish(); cerr != nil && err == nil {
-				err = fmt.Errorf("failed to finish progress bar: %w", cerr)
-			}
-		}()
-	}
 	defer func() {
 		if err != nil {
 			_ = os.Remove(tmpFile)
 		}
 	}()
 
-	callback := func(info req.DownloadInfo) {
-		if bar != nil && info.Response.Response != nil {
-			_ = bar.Set64(info.DownloadedSize)
+	if expectedSHA256 != "" {
+		if _, err := hex.DecodeString(expectedSHA256); err != nil {
+			return fmt.Errorf("invalid sha256 checksum %q: %w", expectedSHA256, err)
 		}
 	}
-
-	resp, err := c.authorize(c.http.R()).
-		SetContext(ctx).
-		SetOutputFile(tmpFile).
-		SetDownloadCallbackWithInterval(callback, 100*time.Millisecond).
-		Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to download file from %s: %w", url, err)
-	}
-	if !resp.IsSuccessState() {
-		return fmt.Errorf("download failed with status code: %d, url:%s", resp.StatusCode, url)
+	if err := c.downloadToTemp(ctx, url, tmpFile, size, file); err != nil {
+		return err
 	}
 
 	info, err := os.Stat(tmpFile)
@@ -242,6 +297,101 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 		return fmt.Errorf("failed to replace target file: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string) (err error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		offset := int64(0)
+		if info, statErr := os.Stat(tmpFile); statErr == nil {
+			offset = info.Size()
+			if size >= 0 && offset > size {
+				_ = os.Remove(tmpFile)
+				offset = 0
+			}
+		}
+
+		if size >= 0 && offset == size {
+			return nil
+		}
+
+		bar := c.newDownloadProgressBar(size, targetFile)
+		if bar != nil {
+			_ = bar.Set64(offset)
+			defer func() {
+				if cerr := bar.Finish(); cerr != nil && err == nil {
+					err = fmt.Errorf("failed to finish progress bar: %w", cerr)
+				}
+			}()
+		}
+
+		request := c.authorize(c.http.R().
+			SetContext(ctx).
+			DisableAutoReadResponse())
+		if offset > 0 {
+			request.SetHeader("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+
+		response, err := request.Get(downloadURL)
+		if err != nil {
+			return fmt.Errorf("failed to download file from %s: %w", downloadURL, err)
+		}
+		if response.Body == nil {
+			return fmt.Errorf("download response body is empty, url:%s", downloadURL)
+		}
+
+		if offset > 0 && response.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			_ = response.Body.Close()
+			_ = os.Remove(tmpFile)
+			continue
+		}
+		if offset > 0 && response.StatusCode == http.StatusOK {
+			offset = 0
+			_ = os.Remove(tmpFile)
+			if bar != nil {
+				_ = bar.Set64(0)
+			}
+		}
+		if offset > 0 && response.StatusCode != http.StatusPartialContent {
+			_ = response.Body.Close()
+			return fmt.Errorf("resume failed with status code: %d, url:%s", response.StatusCode, downloadURL)
+		}
+		if (offset == 0 && response.StatusCode < 200) || response.StatusCode >= 300 {
+			_ = response.Body.Close()
+			return fmt.Errorf("download failed with status code: %d, url:%s", response.StatusCode, downloadURL)
+		}
+
+		flags := os.O_CREATE | os.O_WRONLY
+		if offset > 0 {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		out, err := os.OpenFile(tmpFile, flags, 0o644)
+		if err != nil {
+			_ = response.Body.Close()
+			return fmt.Errorf("failed to open temporary file: %w", err)
+		}
+
+		writer := io.Writer(out)
+		if bar != nil {
+			writer = io.MultiWriter(out, progressWriter{bar: bar})
+		}
+		_, copyErr := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024))
+		closeBodyErr := response.Body.Close()
+		closeFileErr := out.Close()
+		if copyErr != nil {
+			return fmt.Errorf("failed to write temporary file: %w", copyErr)
+		}
+		if closeBodyErr != nil {
+			return fmt.Errorf("failed to close response body: %w", closeBodyErr)
+		}
+		if closeFileErr != nil {
+			return fmt.Errorf("failed to close temporary file: %w", closeFileErr)
+		}
+
+		return nil
+	}
+	return fmt.Errorf("failed to resume download after retry")
 }
 
 func BuildUpdateListURL(base, app string) (string, error) {
@@ -303,7 +453,7 @@ func CalculateFileSHA256(path string) (string, error) {
 }
 
 func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.ProgressBar {
-	if !c.progress {
+	if !c.progress || c.concurrency > 1 {
 		return nil
 	}
 	return progressbar.NewOptions64(size,
@@ -369,6 +519,17 @@ func (c *Client) authorize(request *req.Request) *req.Request {
 		return request
 	}
 	return request.SetHeader("Authorization", "Bearer "+c.token)
+}
+
+type progressWriter struct {
+	bar *progressbar.ProgressBar
+}
+
+func (w progressWriter) Write(p []byte) (int, error) {
+	if w.bar != nil {
+		_ = w.bar.Add(len(p))
+	}
+	return len(p), nil
 }
 
 func fileExists(path string) bool {

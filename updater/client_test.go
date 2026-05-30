@@ -235,6 +235,48 @@ func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
 	}
 }
 
+func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
+	body := []byte("resume payload")
+	expectedSHA := sha256Hex(body)
+	offset := int64(6)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", "14")
+			return
+		}
+		if r.Header.Get("Range") != "bytes=6-" {
+			t.Fatalf("Range header = %q, want %q", r.Header.Get("Range"), "bytes=6-")
+		}
+		w.Header().Set("Content-Range", "bytes 6-13/14")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(body[offset:])
+	}))
+	defer server.Close()
+
+	client, err := New(Options{BaseURL: server.URL, AppName: "app"})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	target := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(target+".tmp", body[:offset], 0o644); err != nil {
+		t.Fatalf("failed to write temporary file: %v", err)
+	}
+	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA); err != nil {
+		t.Fatalf("downloadFile returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read target: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("target content = %q, want %q", string(got), string(body))
+	}
+}
+
 func sha256Hex(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])

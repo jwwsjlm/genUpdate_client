@@ -86,6 +86,7 @@ Windows 示例：
 | `-config` | 否 | 指定配置文件路径；不传时会尝试读取程序同目录的 `genUpdate_client.json` |
 | `-process` | 否 | 更新前等待退出的目标进程名，例如 `yourapp.exe` |
 | `-wait-timeout` | 否 | 等待目标进程退出的最长时间，例如 `2m`；不传或为 `0` 表示一直等待 |
+| `-concurrency` | 否 | 并发下载数量，默认 `1` 表示顺序下载 |
 
 ## 配置文件
 
@@ -97,6 +98,7 @@ Windows 示例：
   "name": "星月",
   "token": "your-token",
   "process": "yourapp.exe",
+  "concurrency": 3,
   "waitProcessTimeoutSeconds": 120,
   "autoYes": true,
   "noWait": true
@@ -134,6 +136,18 @@ Authorization: Bearer your-token
 ```
 
 这个格式和服务端的 `GENUPDATE_APP_TOKENS` 配置兼容。
+
+## 断点续传和并发下载
+
+客户端基于 `req/v3` 处理 HTTP 请求。下载中断后会保留 `.tmp` 临时文件，下次更新时如果服务端支持 `Range`，客户端会从已下载的位置继续拉取。
+
+并发下载默认关闭，保持输出更清晰。需要加速多个文件下载时，可以设置并发数：
+
+```bash
+genUpdate_client.exe -url http://localhost:8090 -name 星月 -concurrency 3 -y -no-wait
+```
+
+并发模式下仍会显示整体文件进度；单文件下载进度条会在顺序下载时显示，避免多个下载条交错输出。
 
 ## 目标软件正在运行怎么办
 
@@ -226,6 +240,7 @@ func main() {
 		Token:              "your-token",
 		ProcessName:        "yourapp.exe",
 		WaitProcessTimeout: 2 * time.Minute,
+		Concurrency:        3,
 		Writer:             os.Stdout,
 		Progress:           true,
 	})
