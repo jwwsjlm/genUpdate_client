@@ -20,6 +20,7 @@ import (
 type Options struct {
 	BaseURL            string
 	AppName            string
+	Token              string
 	ProcessName        string
 	WaitProcessTimeout time.Duration
 	Writer             io.Writer
@@ -29,6 +30,7 @@ type Options struct {
 type Client struct {
 	baseURL            string
 	appName            string
+	token              string
 	processName        string
 	waitProcessTimeout time.Duration
 	writer             io.Writer
@@ -61,6 +63,7 @@ func New(options Options) (*Client, error) {
 	return &Client{
 		baseURL:            strings.TrimSpace(options.BaseURL),
 		appName:            strings.TrimSpace(options.AppName),
+		token:              strings.TrimSpace(options.Token),
 		processName:        strings.TrimSpace(options.ProcessName),
 		waitProcessTimeout: options.WaitProcessTimeout,
 		writer:             writer,
@@ -78,7 +81,7 @@ func (c *Client) FetchManifest(ctx context.Context) (Manifest, error) {
 		return Manifest{}, err
 	}
 
-	resp, err := c.http.R().SetContext(ctx).Get(updateListURL)
+	resp, err := c.authorize(c.http.R().SetContext(ctx)).Get(updateListURL)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("failed to send request: %w, url:%s", err, updateListURL)
 	}
@@ -207,7 +210,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 		}
 	}
 
-	resp, err := c.http.R().
+	resp, err := c.authorize(c.http.R()).
 		SetContext(ctx).
 		SetOutputFile(tmpFile).
 		SetDownloadCallbackWithInterval(callback, 100*time.Millisecond).
@@ -359,6 +362,13 @@ func (c *Client) println(args ...any) {
 	if c.writer != nil {
 		_, _ = fmt.Fprintln(c.writer, args...)
 	}
+}
+
+func (c *Client) authorize(request *req.Request) *req.Request {
+	if c.token == "" {
+		return request
+	}
+	return request.SetHeader("Authorization", "Bearer "+c.token)
 }
 
 func fileExists(path string) bool {

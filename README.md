@@ -80,6 +80,7 @@ Windows 示例：
 | --- | --- | --- |
 | `-url` | 是 | 更新服务端地址，例如 `http://localhost:8090` |
 | `-name` | 是 | 应用名称，必须和服务端中的应用名一致 |
+| `-token` | 否 | 服务端开启 token 后传入访问 token |
 | `-y` | 否 | 自动确认更新，不再等待用户输入 Y/N |
 | `-no-wait` | 否 | 程序结束后立即退出，不等待回车 |
 | `-config` | 否 | 指定配置文件路径；不传时会尝试读取程序同目录的 `genUpdate_client.json` |
@@ -94,6 +95,7 @@ Windows 示例：
 {
   "url": "http://localhost:8090",
   "name": "星月",
+  "token": "your-token",
   "process": "yourapp.exe",
   "waitProcessTimeoutSeconds": 120,
   "autoYes": true,
@@ -116,6 +118,22 @@ Windows 下可以直接双击 `genUpdate_client.exe`，或者在快捷方式中�
 ```
 
 命令行参数优先级更高。如果配置文件里写了 `name`，但启动时又传了 `-name 其他应用`，最终会使用命令行里的值。
+
+## Token 鉴权
+
+如果服务端配置了应用 token，客户端需要传入相同 token：
+
+```bash
+genUpdate_client.exe -url http://localhost:8090 -name 星月 -token your-token -y -no-wait
+```
+
+客户端会在请求清单和下载文件时发送：
+
+```text
+Authorization: Bearer your-token
+```
+
+这个格式和服务端的 `GENUPDATE_APP_TOKENS` 配置兼容。
 
 ## 目标软件正在运行怎么办
 
@@ -205,6 +223,7 @@ func main() {
 	client, err := updater.New(updater.Options{
 		BaseURL:            "http://localhost:8090",
 		AppName:            "星月",
+		Token:              "your-token",
 		ProcessName:        "yourapp.exe",
 		WaitProcessTimeout: 2 * time.Minute,
 		Writer:             os.Stdout,

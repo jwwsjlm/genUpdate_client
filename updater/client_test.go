@@ -151,6 +151,63 @@ func TestClientRunDownloadsAndSkipsValidFiles(t *testing.T) {
 	}
 }
 
+func TestClientSendsBearerTokenToManifestAndDownload(t *testing.T) {
+	body := []byte("protected payload")
+	expectedSHA := sha256Hex(body)
+	const token = "secret-token"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
+
+		switch r.URL.Path {
+		case "/updateList/app":
+			_ = json.NewEncoder(w).Encode(Manifest{
+				Ret: "ok",
+				AppList: AppList{
+					ReleaseNote: ReleaseNote{AppName: "app", Version: "1.0.0"},
+					FileList: []File{
+						{
+							Path:        filepath.ToSlash(filepath.Join("app", "protected.bin")),
+							Name:        "protected.bin",
+							Size:        int64(len(body)),
+							Sha256:      expectedSHA,
+							DownloadURL: "/download/protected.bin",
+						},
+					},
+				},
+			})
+		case "/download/protected.bin":
+			_, _ = w.Write(body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Chdir(t.TempDir())
+
+	client, err := New(Options{
+		BaseURL: server.URL,
+		AppName: "app",
+		Token:   token,
+		Writer:  bytes.NewBuffer(nil),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := client.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Downloaded != 1 || len(result.Failed) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
 	body := []byte("short")
 	expectedSHA := sha256Hex(body)

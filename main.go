@@ -19,11 +19,13 @@ var autoYes bool
 var skipWait bool
 var configPath string
 var targetProcess string
+var updateToken string
 var processWaitTimeout time.Duration
 
 type clientConfig struct {
 	BaseURL                   string `json:"url"`
 	AppName                   string `json:"name"`
+	Token                     string `json:"token"`
 	ProcessName               string `json:"process"`
 	AutoYes                   *bool  `json:"autoYes"`
 	SkipWait                  *bool  `json:"noWait"`
@@ -36,6 +38,7 @@ func init() {
 	flag.BoolVar(&autoYes, "y", false, "自动确认更新，无需交互")
 	flag.BoolVar(&skipWait, "no-wait", false, "程序结束后立即退出，不等待回车")
 	flag.StringVar(&configPath, "config", "", "配置文件路径，默认读取程序同目录 genUpdate_client.json（如果存在）")
+	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
 	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "等待目标进程退出的最长时间，例如: 2m；0 表示一直等待")
 }
@@ -53,6 +56,7 @@ func main() {
 	client, err := updater.New(updater.Options{
 		BaseURL:            baseURL,
 		AppName:            appName,
+		Token:              updateToken,
 		ProcessName:        targetProcess,
 		WaitProcessTimeout: processWaitTimeout,
 		Writer:             os.Stdout,
@@ -153,6 +157,9 @@ func applyConfig(path string) error {
 	}
 	if cfg.AppName != "" && !flagProvided("name") {
 		appName = cfg.AppName
+	}
+	if cfg.Token != "" && !flagProvided("token") {
+		updateToken = cfg.Token
 	}
 	if cfg.ProcessName != "" && !flagProvided("process") {
 		targetProcess = cfg.ProcessName
