@@ -1,90 +1,92 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/fileutil"
-	"github.com/dustin/go-humanize"
+	"github.com/jwwsjlm/genUpdate_client/updater"
 )
 
 var baseURL string
 var appName string
 var autoYes bool
 var skipWait bool
+var configPath string
+var targetProcess string
+var processWaitTimeout time.Duration
+
+type clientConfig struct {
+	BaseURL                   string `json:"url"`
+	AppName                   string `json:"name"`
+	ProcessName               string `json:"process"`
+	AutoYes                   *bool  `json:"autoYes"`
+	SkipWait                  *bool  `json:"noWait"`
+	ProcessWaitTimeoutSeconds int    `json:"waitProcessTimeoutSeconds"`
+}
 
 func init() {
 	flag.StringVar(&baseURL, "url", "", "更新服务端地址，例如: https://example.com")
 	flag.StringVar(&appName, "name", "", "软件名称")
 	flag.BoolVar(&autoYes, "y", false, "自动确认更新，无需交互")
 	flag.BoolVar(&skipWait, "no-wait", false, "程序结束后立即退出，不等待回车")
+	flag.StringVar(&configPath, "config", "", "配置文件路径，默认读取程序同目录 genUpdate_client.json（如果存在）")
+	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
+	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "等待目标进程退出的最长时间，例如: 2m；0 表示一直等待")
 }
 
 func main() {
 	flag.Parse()
 
+	if err := applyConfig(configPath); err != nil {
+		fmt.Println("读取配置失败", err)
+		return
+	}
+
 	defer waitForExit(skipWait)
 
-	if appName == "" || baseURL == "" {
-		fmt.Println("appName/baseURL 未设置，请通过 -name 和 -url 传入后再运行程序。")
+	client, err := updater.New(updater.Options{
+		BaseURL:            baseURL,
+		AppName:            appName,
+		ProcessName:        targetProcess,
+		WaitProcessTimeout: processWaitTimeout,
+		Writer:             os.Stdout,
+		Progress:           true,
+	})
+	if err != nil {
+		fmt.Println("参数无效", err)
 		flag.PrintDefaults()
 		return
 	}
 
-	content, err := getUpdateContent(baseURL + "/updateList/" + appName)
+	ctx := context.Background()
+	manifest, err := client.FetchManifest(ctx)
 	if err != nil {
 		fmt.Println("访问失败", err)
 		return
 	}
-	if content.Ret != "ok" {
-		fmt.Println("返回 ret 失败", content.Ret)
-		return
-	}
 
-	fmt.Printf("软件名称:%s \n", content.AppList.ReleaseNote.AppName)
-	fmt.Printf("软件公告:%s \n", content.AppList.ReleaseNote.Description)
-	fmt.Printf("软件版本:%s \n", content.AppList.ReleaseNote.Version)
+	fmt.Printf("软件名称:%s \n", manifest.AppList.ReleaseNote.AppName)
+	fmt.Printf("软件公告:%s \n", manifest.AppList.ReleaseNote.Description)
+	fmt.Printf("软件版本:%s \n", manifest.AppList.ReleaseNote.Version)
 
 	if !autoYes {
-		fmt.Printf("运行之前,请确保 '%s' 相关软件已经关闭。如果更新失败,可尝试重启电脑后再次使用。\n输入 Y 继续运行，N 退出更新程序。\n", content.AppList.ReleaseNote.AppName)
+		fmt.Printf("运行之前，请确认 '%s' 相关软件已经关闭。如果更新失败，可尝试重启电脑后再次使用。\n输入 Y 继续运行，N 退出更新程序。\n", manifest.AppList.ReleaseNote.AppName)
 		if !confirmProceed() {
 			os.Exit(0)
 		}
 	}
 
-	for _, v := range content.AppList.FileList {
-		downloadURL := joinURL(baseURL, v.DownloadURL)
-		relativePath, err := extractRelativePath(v.Path, appName)
-		if err != nil {
-			fmt.Println("解析路径出错:", err)
-			continue
-		}
-
-		fmt.Println("--------------------------------------------------------------------")
-		if fileutil.IsExist(relativePath) {
-			sha, err := fileutil.Sha(relativePath, 256)
-			if err != nil {
-				fmt.Printf("计算 SHA256 错误:%s, 重新下载\n", err)
-			} else if sha != v.Sha256 {
-				fmt.Printf("文件名:[%s], 已存在，但本地和云端不一致，准备重新下载\n", v.Name)
-			} else {
-				fmt.Printf("文件名:[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", v.Name)
-				continue
-			}
-		}
-
-		fmt.Print("开始下载文件:[" + v.Name + "]\n" + "文件 SHA256:" + v.Sha256 + "\n" + "文件大小:" + humanize.Bytes(uint64(v.Size)) + "\n")
-		err = downloadFile(downloadURL, relativePath, v.Size, v.Sha256)
-		if err != nil {
-			fmt.Printf("文件下载失败: %s, 错误: %v\n", v.Name, err)
-			continue
-		}
-
-		fmt.Printf("\n文件名:%s, 下载完成并校验通过\n", v.Name)
+	result, err := client.Update(ctx, manifest)
+	if err != nil {
+		fmt.Printf("更新完成，但有文件失败: %v\n", err)
 	}
+	fmt.Printf("\n更新结果: 总计 %d, 下载 %d, 跳过 %d, 失败 %d\n", result.Total, result.Downloaded, result.Skipped, len(result.Failed))
 }
 
 func confirmProceed() bool {
@@ -92,7 +94,7 @@ func confirmProceed() bool {
 		var input string
 		fmt.Print("请输入 Y 或 N: ")
 		if _, err := fmt.Scanln(&input); err != nil {
-			fmt.Println("读取输入时出错:", err)
+			fmt.Println("读取输入时出错", err)
 			return false
 		}
 
@@ -124,6 +126,67 @@ func waitForExit(skip bool) {
 	_, _ = fmt.Scanln()
 }
 
-func joinURL(base, path string) string {
-	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
+func applyConfig(path string) error {
+	resolvedPath, required, err := resolveConfigPath(path)
+	if err != nil {
+		return err
+	}
+	if resolvedPath == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		if !required && os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var cfg clientConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("%s: %w", resolvedPath, err)
+	}
+
+	if cfg.BaseURL != "" && !flagProvided("url") {
+		baseURL = cfg.BaseURL
+	}
+	if cfg.AppName != "" && !flagProvided("name") {
+		appName = cfg.AppName
+	}
+	if cfg.ProcessName != "" && !flagProvided("process") {
+		targetProcess = cfg.ProcessName
+	}
+	if cfg.AutoYes != nil && !flagProvided("y") {
+		autoYes = *cfg.AutoYes
+	}
+	if cfg.SkipWait != nil && !flagProvided("no-wait") {
+		skipWait = *cfg.SkipWait
+	}
+	if cfg.ProcessWaitTimeoutSeconds > 0 && !flagProvided("wait-timeout") {
+		processWaitTimeout = time.Duration(cfg.ProcessWaitTimeoutSeconds) * time.Second
+	}
+	return nil
+}
+
+func resolveConfigPath(path string) (resolvedPath string, required bool, err error) {
+	if path != "" {
+		return path, true, nil
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return "", false, err
+	}
+	return filepath.Join(filepath.Dir(exe), "genUpdate_client.json"), false, nil
+}
+
+func flagProvided(name string) bool {
+	provided := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }
