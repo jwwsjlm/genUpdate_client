@@ -712,7 +712,7 @@ func (p *concurrentProgress) apply(event progressEvent) {
 }
 
 func (p *concurrentProgress) render(eventID string) {
-	if p.current == "" || p.files[p.current] == nil || p.files[p.current].finished {
+	if p.shouldSwitchTo(eventID) {
 		p.selectCurrent(eventID)
 	}
 	if p.current == "" {
@@ -725,6 +725,14 @@ func (p *concurrentProgress) render(eventID string) {
 		p.replaceBar(p.current, state)
 	}
 	_ = p.bar.Set64(state.current)
+}
+
+func (p *concurrentProgress) shouldSwitchTo(eventID string) bool {
+	state := p.files[eventID]
+	if state != nil && !state.finished && eventID != p.current {
+		return true
+	}
+	return p.current == "" || p.files[p.current] == nil || p.files[p.current].finished
 }
 
 func (p *concurrentProgress) replaceBar(id string, state *progressState) {
