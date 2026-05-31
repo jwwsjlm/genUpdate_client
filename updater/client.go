@@ -40,6 +40,7 @@ type Client struct {
 	writer             io.Writer
 	progress           bool
 	http               *req.Client
+	outputMu           sync.Mutex
 }
 
 type fileAction int
@@ -486,16 +487,15 @@ func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.Pr
 		return nil
 	}
 	return progressbar.NewOptions64(size,
-		progressbar.OptionSetWriter(c.writer),
-		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWriter(c.lockedWriter()),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWidth(20),
 		progressbar.OptionSetSpinnerChangeInterval(0),
 		progressbar.OptionSetPredictTime(true),
-		progressbar.OptionSetDescription("正在下载:[yellow]["+filepath.Base(file)+"]...[reset]"),
+		progressbar.OptionSetDescription("正在下载 ["+filepath.Base(file)+"]"),
 		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[red]>[reset]",
+			Saucer:        "=",
+			SaucerHead:    ">",
 			SaucerPadding: " ",
 			BarStart:      "[",
 			BarEnd:        "]",
@@ -504,20 +504,19 @@ func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.Pr
 }
 
 func (c *Client) newFileProgressBar(total int) *progressbar.ProgressBar {
-	if !c.progress {
+	if !c.progress || c.concurrency <= 1 {
 		return nil
 	}
 	if total < 0 {
 		total = 0
 	}
 	return progressbar.NewOptions(total,
-		progressbar.OptionSetWriter(c.writer),
-		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWriter(c.lockedWriter()),
 		progressbar.OptionSetWidth(20),
-		progressbar.OptionSetDescription("整体进度:[cyan][文件]...[reset]"),
+		progressbar.OptionSetDescription("整体进度 [文件]"),
 		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[red]>[reset]",
+			Saucer:        "=",
+			SaucerHead:    ">",
 			SaucerPadding: " ",
 			BarStart:      "[",
 			BarEnd:        "]",
@@ -533,13 +532,24 @@ func addProgress(bar *progressbar.ProgressBar) {
 
 func (c *Client) printf(format string, args ...any) {
 	if c.writer != nil {
+		c.outputMu.Lock()
+		defer c.outputMu.Unlock()
 		_, _ = fmt.Fprintf(c.writer, format, args...)
 	}
 }
 
 func (c *Client) println(args ...any) {
 	if c.writer != nil {
+		c.outputMu.Lock()
+		defer c.outputMu.Unlock()
 		_, _ = fmt.Fprintln(c.writer, args...)
+	}
+}
+
+func (c *Client) lockedWriter() io.Writer {
+	return lockedWriter{
+		writer: c.writer,
+		mu:     &c.outputMu,
 	}
 }
 
@@ -559,6 +569,20 @@ func (w progressWriter) Write(p []byte) (int, error) {
 		_ = w.bar.Add(len(p))
 	}
 	return len(p), nil
+}
+
+type lockedWriter struct {
+	writer io.Writer
+	mu     *sync.Mutex
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	if w.writer == nil {
+		return len(p), nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(p)
 }
 
 func fileExists(path string) bool {

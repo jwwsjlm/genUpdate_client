@@ -14,6 +14,7 @@
 - 支持断点续传，服务端支持 `Range` 时会从 `.tmp` 已下载位置继续
 - 支持按文件并发下载：`-concurrency`
 - 支持等待目标软件进程退出，避免 Windows 文件占用导致替换失败
+- 支持动态进度条；也可用 `-no-progress` 关闭，便于第三方程序调用或日志重定向
 - 同时支持独立 CLI 和 Go 库调用
 - tag 推送后自动通过 GitHub Actions + GoReleaser 构建 Release
 
@@ -79,6 +80,12 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 ./genUpdate_client -url http://localhost:8090 -name 星月 -concurrency 3 -y -no-wait
 ```
 
+被第三方程序调用或输出到日志文件时，建议关闭动态进度条：
+
+```bash
+./genUpdate_client -url http://localhost:8090 -name 星月 -y -no-wait -no-progress
+```
+
 ## 参数
 
 | 参数 | 必填 | 说明 |
@@ -92,6 +99,7 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 | `-concurrency` | 否 | 并发下载数量，默认 `1` 表示顺序下载 |
 | `-y` | 否 | 自动确认更新，不等待用户输入 Y/N |
 | `-no-wait` | 否 | 程序结束后立即退出 |
+| `-no-progress` | 否 | 关闭动态进度条，适合第三方程序调用、日志重定向或不支持动态刷新的终端 |
 
 ## 配置文件
 
@@ -106,7 +114,8 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
   "concurrency": 3,
   "waitProcessTimeoutSeconds": 120,
   "autoYes": true,
-  "noWait": true
+  "noWait": true,
+  "noProgress": false
 }
 ```
 
@@ -289,6 +298,14 @@ git push origin v1.0.0
 ### 并发越高越好吗
 
 不一定。并发会增加服务端压力，也会让日志更密集。一般建议从 `2` 或 `3` 开始。
+
+### 进度条出现 `\x1b[36m` 这样的字符怎么办
+
+这是终端没有正确解释颜色控制码或动态刷新字符。当前版本默认使用纯文本进度条，不再输出颜色控制码；如果仍然由第三方程序捕获输出，建议加 `-no-progress`。
+
+### 为什么双击或从目标软件里启动会弹出新窗口
+
+Windows 控制台程序如果不是从已有 CMD/PowerShell 里启动，系统通常会给它新建一个控制台窗口。当前 Release 构建是控制台程序，没有使用 `-H windowsgui`；Windows amd64 构建也嵌入了 `asInvoker` manifest，避免因为文件名包含 `Update` 被系统误判为安装器并触发提权。若希望复用原来的 CMD 窗口，需要从那个 CMD/PowerShell 里直接运行，或让目标软件启动更新器时继承标准输入输出。若只想后台更新，可以由目标软件以库方式调用，或启动 CLI 时使用 `-y -no-wait -no-progress`。
 
 ## License
 

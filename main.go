@@ -17,6 +17,7 @@ var baseURL string
 var appName string
 var autoYes bool
 var skipWait bool
+var noProgress bool
 var configPath string
 var targetProcess string
 var updateToken string
@@ -31,6 +32,7 @@ type clientConfig struct {
 	Concurrency               int    `json:"concurrency"`
 	AutoYes                   *bool  `json:"autoYes"`
 	SkipWait                  *bool  `json:"noWait"`
+	NoProgress                *bool  `json:"noProgress"`
 	ProcessWaitTimeoutSeconds int    `json:"waitProcessTimeoutSeconds"`
 }
 
@@ -39,6 +41,7 @@ func init() {
 	flag.StringVar(&appName, "name", "", "软件名称")
 	flag.BoolVar(&autoYes, "y", false, "自动确认更新，无需交互")
 	flag.BoolVar(&skipWait, "no-wait", false, "程序结束后立即退出，不等待回车")
+	flag.BoolVar(&noProgress, "no-progress", false, "关闭动态进度条，适合第三方程序调用或日志重定向")
 	flag.StringVar(&configPath, "config", "", "配置文件路径，默认读取程序同目录 genUpdate_client.json（如果存在）")
 	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
@@ -64,7 +67,7 @@ func main() {
 		WaitProcessTimeout: processWaitTimeout,
 		Concurrency:        concurrency,
 		Writer:             os.Stdout,
-		Progress:           true,
+		Progress:           !noProgress,
 	})
 	if err != nil {
 		fmt.Println("参数无效", err)
@@ -176,6 +179,9 @@ func applyConfig(path string) error {
 	}
 	if cfg.SkipWait != nil && !flagProvided("no-wait") {
 		skipWait = *cfg.SkipWait
+	}
+	if cfg.NoProgress != nil && !flagProvided("no-progress") {
+		noProgress = *cfg.NoProgress
 	}
 	if cfg.ProcessWaitTimeoutSeconds > 0 && !flagProvided("wait-timeout") {
 		processWaitTimeout = time.Duration(cfg.ProcessWaitTimeoutSeconds) * time.Second

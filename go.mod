@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/imroc/req/v3 v3.54.0
-	github.com/schollz/progressbar/v3 v3.18.0
+	github.com/schollz/progressbar/v3 v3.19.0
 	golang.org/x/sys v0.34.0
 )
 

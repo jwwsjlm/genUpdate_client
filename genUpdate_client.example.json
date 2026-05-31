@@ -6,5 +6,6 @@
   "concurrency": 3,
   "waitProcessTimeoutSeconds": 120,
   "autoYes": true,
-  "noWait": true
+  "noWait": true,
+  "noProgress": false
 }
