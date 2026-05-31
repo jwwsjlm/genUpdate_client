@@ -84,7 +84,8 @@ func main() {
 
 	fmt.Printf("软件名称:%s \n", manifest.AppList.ReleaseNote.AppName)
 	fmt.Printf("软件公告:%s \n", manifest.AppList.ReleaseNote.Description)
-	fmt.Printf("软件版本:%s \n", manifest.AppList.ReleaseNote.Version)
+	fmt.Printf("软件当前版本:%s \n", currentAppVersion(targetProcess))
+	fmt.Printf("软件最新版本:%s \n", manifest.AppList.ReleaseNote.Version)
 
 	if !autoYes {
 		fmt.Printf("运行之前，请确认 '%s' 相关软件已经关闭。如果更新失败，可尝试重启电脑后再次使用。\n输入 Y 继续运行，N 退出更新程序。\n", manifest.AppList.ReleaseNote.AppName)
@@ -135,6 +136,35 @@ func waitForExit(skip bool) {
 
 	fmt.Println("\n按 Enter 键以退出...")
 	_, _ = fmt.Scanln()
+}
+
+func currentAppVersion(processName string) string {
+	processName = strings.TrimSpace(processName)
+	if processName == "" {
+		return "未知（未设置 -process）"
+	}
+
+	version, err := GetExeVersion(resolveTargetExecutablePath(processName))
+	if err != nil {
+		return "未知"
+	}
+	return version
+}
+
+func resolveTargetExecutablePath(processName string) string {
+	if filepath.IsAbs(processName) {
+		return processName
+	}
+
+	if _, err := os.Stat(processName); err == nil {
+		return processName
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return processName
+	}
+	return filepath.Join(filepath.Dir(exe), processName)
 }
 
 func applyConfig(path string) error {
