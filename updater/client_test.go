@@ -295,6 +295,89 @@ func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
 	}
 }
 
+func TestConcurrentProgressSwitchesToActiveFileAfterCurrentFinishes(t *testing.T) {
+	client, err := New(Options{
+		BaseURL:     "https://updates.example.com",
+		AppName:     "app",
+		Writer:      bytes.NewBuffer(nil),
+		Progress:    true,
+		Concurrency: 2,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	progress := &concurrentProgress{
+		client: client,
+		events: make(chan progressEvent, 8),
+		done:   make(chan struct{}),
+		files:  make(map[string]*progressState),
+		order:  make([]string, 0, 2),
+	}
+
+	progress.apply(progressEvent{id: "large", name: "large.bin", total: 100, current: 0, set: true})
+	progress.apply(progressEvent{id: "small", name: "small.bin", total: 10, current: 0, set: true})
+	progress.render("small")
+	if progress.current != "small" || progress.barID != "small" {
+		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
+	}
+
+	progress.apply(progressEvent{id: "small", current: 10, set: true, finished: true})
+	progress.render("small")
+	if progress.current != "large" || progress.barID != "large" {
+		t.Fatalf("current = %q, barID = %q, want large", progress.current, progress.barID)
+	}
+
+	progress.apply(progressEvent{id: "large", current: 50, set: true})
+	progress.render("large")
+	if got := progress.files["large"].current; got != 50 {
+		t.Fatalf("large progress = %d, want 50", got)
+	}
+}
+
+func TestConcurrentDownloadReporterFinishesOnceAcrossRangeRetry(t *testing.T) {
+	client, err := New(Options{
+		BaseURL:     "https://updates.example.com",
+		AppName:     "app",
+		Writer:      bytes.NewBuffer(nil),
+		Progress:    true,
+		Concurrency: 2,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	progress := client.newConcurrentProgress()
+	if progress == nil {
+		t.Fatalf("newConcurrentProgress returned nil")
+	}
+
+	target := filepath.Join(t.TempDir(), "payload.bin")
+	if err := os.WriteFile(target+".tmp", []byte("partial"), 0o644); err != nil {
+		t.Fatalf("failed to write temporary file: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "" {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		_, _ = w.Write([]byte("fresh"))
+	}))
+	defer server.Close()
+
+	err = client.downloadToTemp(context.Background(), server.URL, target+".tmp", int64(len("fresh")), target, progress)
+	if err != nil {
+		t.Fatalf("downloadToTemp returned error: %v", err)
+	}
+
+	progress.Close()
+	state := progress.files[target]
+	if state == nil || !state.finished {
+		t.Fatalf("progress state = %+v, want finished", state)
+	}
+}
+
 func sha256Hex(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])

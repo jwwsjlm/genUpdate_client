@@ -312,6 +312,13 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 }
 
 func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string, progress *concurrentProgress) (err error) {
+	reporter := newConcurrentDownloadReporter(progress, size, targetFile)
+	if reporter != nil {
+		defer func() {
+			reporter.Finish(err == nil)
+		}()
+	}
+
 	for attempt := 0; attempt < 2; attempt++ {
 		offset := int64(0)
 		if info, statErr := os.Stat(tmpFile); statErr == nil {
@@ -327,7 +334,6 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		}
 
 		bar := c.newDownloadProgressBar(size, targetFile)
-		reporter := newConcurrentDownloadReporter(progress, size, targetFile)
 		if bar != nil {
 			_ = bar.Set64(offset)
 			defer func() {
@@ -335,11 +341,9 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 					err = fmt.Errorf("failed to finish progress bar: %w", cerr)
 				}
 			}()
-		} else if reporter != nil {
+		}
+		if reporter != nil {
 			reporter.Set(offset)
-			defer func() {
-				reporter.Finish(err == nil)
-			}()
 		}
 
 		request := c.authorize(c.http.R().
@@ -618,6 +622,7 @@ type progressEvent struct {
 	set      bool
 	finished bool
 	print    func()
+	done     chan struct{}
 }
 
 func newConcurrentDownloadReporter(progress *concurrentProgress, size int64, file string) *downloadReporter {
@@ -634,6 +639,9 @@ func (p *concurrentProgress) Send(event progressEvent) {
 	select {
 	case p.events <- event:
 	case <-p.done:
+		if event.done != nil {
+			close(event.done)
+		}
 	}
 }
 
@@ -646,7 +654,9 @@ func (p *concurrentProgress) Print(print func()) {
 	if print == nil {
 		return
 	}
-	p.Send(progressEvent{print: print})
+	done := make(chan struct{})
+	p.Send(progressEvent{print: print, done: done})
+	<-done
 }
 
 func (p *concurrentProgress) run() {
@@ -654,6 +664,9 @@ func (p *concurrentProgress) run() {
 	for event := range p.events {
 		if event.print != nil {
 			p.print(event.print)
+			if event.done != nil {
+				close(event.done)
+			}
 			continue
 		}
 		p.apply(event)
@@ -669,9 +682,6 @@ func (p *concurrentProgress) print(print func()) {
 		_ = p.bar.Clear()
 	}
 	print()
-	if p.current != "" && p.bar != nil {
-		_ = p.bar.RenderBlank()
-	}
 }
 
 func (p *concurrentProgress) apply(event progressEvent) {
