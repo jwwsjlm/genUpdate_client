@@ -41,6 +41,7 @@ archives:
       {{- .Arch }}
     files:
       - README.md
+      - genUpdate_client.example.json
 
 checksum:
   name_template: checksums.txt

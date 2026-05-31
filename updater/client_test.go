@@ -84,6 +84,24 @@ func TestExtractRelativePath(t *testing.T) {
 	}
 }
 
+func TestBuildDownloadURLRejectsCrossOriginAbsoluteURL(t *testing.T) {
+	_, err := BuildDownloadURL("https://updates.example.com", "https://evil.example.com/file.bin")
+	if err == nil {
+		t.Fatalf("BuildDownloadURL returned nil error")
+	}
+}
+
+func TestBuildDownloadURLAllowsSameOriginAbsoluteURL(t *testing.T) {
+	got, err := BuildDownloadURL("https://updates.example.com/base", "https://updates.example.com/download/file.bin")
+	if err != nil {
+		t.Fatalf("BuildDownloadURL returned error: %v", err)
+	}
+	want := "https://updates.example.com/download/file.bin"
+	if got != want {
+		t.Fatalf("BuildDownloadURL = %q, want %q", got, want)
+	}
+}
+
 func TestClientRunDownloadsAndSkipsValidFiles(t *testing.T) {
 	body := []byte("update payload")
 	expectedSHA := sha256Hex(body)

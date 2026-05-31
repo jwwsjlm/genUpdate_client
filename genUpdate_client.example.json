@@ -1,0 +1,10 @@
+{
+  "url": "http://localhost:8090",
+  "name": "星月",
+  "token": "your-token",
+  "process": "yourapp.exe",
+  "concurrency": 3,
+  "waitProcessTimeoutSeconds": 120,
+  "autoYes": true,
+  "noWait": true
+}

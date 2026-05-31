@@ -222,7 +222,10 @@ sendJobs:
 }
 
 func (c *Client) updateFile(ctx context.Context, file File) (fileAction, error) {
-	downloadURL := JoinURL(c.baseURL, file.DownloadURL)
+	downloadURL, err := BuildDownloadURL(c.baseURL, file.DownloadURL)
+	if err != nil {
+		return fileSkipped, err
+	}
 	relativePath, err := ExtractRelativePath(file.Path, c.appName)
 	if err != nil {
 		return fileSkipped, fmt.Errorf("failed to resolve file path: %w", err)
@@ -406,11 +409,37 @@ func BuildUpdateListURL(base, app string) (string, error) {
 }
 
 func JoinURL(base, path string) string {
-	u, err := url.Parse(path)
-	if err == nil && u.IsAbs() {
-		return u.String()
+	joined, err := BuildDownloadURL(base, path)
+	if err == nil {
+		return joined
 	}
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
+func BuildDownloadURL(base, path string) (string, error) {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	if baseURL.Scheme == "" || baseURL.Host == "" {
+		return "", fmt.Errorf("base url must include scheme and host")
+	}
+
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", err
+	}
+	if u.IsAbs() {
+		if !sameOrigin(baseURL, u) {
+			return "", fmt.Errorf("download url host %q does not match base host %q", u.Host, baseURL.Host)
+		}
+		return u.String(), nil
+	}
+	return url.JoinPath(baseURL.String(), strings.TrimLeft(path, "/"))
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
 func ExtractRelativePath(fullPath, baseDir string) (string, error) {
