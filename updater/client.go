@@ -127,13 +127,8 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 	files := manifest.AppList.FileList
 	result := Result{Total: len(files)}
 
-	fileBar := c.newFileProgressBar(len(files))
-	if fileBar != nil {
-		defer fileBar.Finish()
-	}
-
 	if c.concurrency > 1 {
-		return c.updateConcurrent(ctx, files, result, fileBar)
+		return c.updateConcurrent(ctx, files, result)
 	}
 
 	for _, file := range files {
@@ -141,11 +136,10 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 			return result, err
 		}
 
-		action, err := c.updateFile(ctx, file)
+		action, err := c.updateFile(ctx, file, nil)
 		if err != nil {
 			result.Failed = append(result.Failed, FileError{File: file, Err: err})
 			c.printf("文件下载失败: %s, 错误: %v\n", file.Name, err)
-			addProgress(fileBar)
 			continue
 		}
 
@@ -154,7 +148,6 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 		} else {
 			result.Skipped++
 		}
-		addProgress(fileBar)
 	}
 
 	if len(result.Failed) > 0 {
@@ -163,13 +156,18 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 	return result, nil
 }
 
-func (c *Client) updateConcurrent(ctx context.Context, files []File, result Result, fileBar *progressbar.ProgressBar) (Result, error) {
+func (c *Client) updateConcurrent(ctx context.Context, files []File, result Result) (Result, error) {
 	workerCount := c.concurrency
 	if workerCount > len(files) {
 		workerCount = len(files)
 	}
 	if workerCount < 1 {
 		workerCount = 1
+	}
+
+	downloadBar := c.newTotalDownloadProgressBar(files)
+	if downloadBar != nil {
+		defer downloadBar.Finish()
 	}
 
 	jobs := make(chan File)
@@ -184,12 +182,11 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 				if err := ctx.Err(); err != nil {
 					mu.Lock()
 					result.Failed = append(result.Failed, FileError{File: file, Err: err})
-					addProgress(fileBar)
 					mu.Unlock()
 					continue
 				}
 
-				action, err := c.updateFile(ctx, file)
+				action, err := c.updateFile(ctx, file, downloadBar)
 				mu.Lock()
 				if err != nil {
 					result.Failed = append(result.Failed, FileError{File: file, Err: err})
@@ -199,7 +196,6 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 				} else {
 					result.Skipped++
 				}
-				addProgress(fileBar)
 				mu.Unlock()
 			}
 		}()
@@ -222,7 +218,7 @@ sendJobs:
 	return result, ctx.Err()
 }
 
-func (c *Client) updateFile(ctx context.Context, file File) (fileAction, error) {
+func (c *Client) updateFile(ctx context.Context, file File, downloadBar *progressbar.ProgressBar) (fileAction, error) {
 	downloadURL, err := BuildDownloadURL(c.baseURL, file.DownloadURL)
 	if err != nil {
 		return fileSkipped, err
@@ -247,20 +243,21 @@ func (c *Client) updateFile(ctx context.Context, file File) (fileAction, error) 
 				c.printf("文件名[%s], 已存在，但本地和云端不一致，准备重新下载\n", file.Name)
 			} else {
 				c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", file.Name)
+				addProgress64(downloadBar, file.Size)
 				return fileSkipped, nil
 			}
 		}
 	}
 
 	c.printf("开始下载文件[%s]\n文件 SHA256:%s\n文件大小:%s\n", file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
-	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256); err != nil {
+	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256, downloadBar); err != nil {
 		return fileSkipped, err
 	}
 	c.printf("\n文件名%s, 下载完成并校验通过\n", file.Name)
 	return fileDownloaded, nil
 }
 
-func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string) (err error) {
+func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string, downloadBar *progressbar.ProgressBar) (err error) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
@@ -277,7 +274,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 			return fmt.Errorf("invalid sha256 checksum %q: %w", expectedSHA256, err)
 		}
 	}
-	if err := c.downloadToTemp(ctx, url, tmpFile, size, file); err != nil {
+	if err := c.downloadToTemp(ctx, url, tmpFile, size, file, downloadBar); err != nil {
 		return err
 	}
 
@@ -303,7 +300,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 	return nil
 }
 
-func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string) (err error) {
+func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string, downloadBar *progressbar.ProgressBar) (err error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		offset := int64(0)
 		if info, statErr := os.Stat(tmpFile); statErr == nil {
@@ -315,6 +312,7 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		}
 
 		if size >= 0 && offset == size {
+			addProgress64(downloadBar, offset)
 			return nil
 		}
 
@@ -379,6 +377,9 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		writer := io.Writer(out)
 		if bar != nil {
 			writer = io.MultiWriter(out, progressWriter{bar: bar})
+		} else if downloadBar != nil {
+			addProgress64(downloadBar, offset)
+			writer = io.MultiWriter(out, progressWriter{bar: downloadBar})
 		}
 		_, copyErr := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024))
 		closeBodyErr := response.Body.Close()
@@ -503,17 +504,28 @@ func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.Pr
 	)
 }
 
-func (c *Client) newFileProgressBar(total int) *progressbar.ProgressBar {
+func (c *Client) newTotalDownloadProgressBar(files []File) *progressbar.ProgressBar {
 	if !c.progress || c.concurrency <= 1 {
 		return nil
 	}
-	if total < 0 {
-		total = 0
+
+	var total int64
+	for _, file := range files {
+		if file.Size > 0 {
+			total += file.Size
+		}
 	}
-	return progressbar.NewOptions(total,
+	if total <= 0 {
+		return nil
+	}
+
+	return progressbar.NewOptions64(total,
 		progressbar.OptionSetWriter(c.lockedWriter()),
+		progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWidth(20),
-		progressbar.OptionSetDescription("整体进度 [文件]"),
+		progressbar.OptionSetSpinnerChangeInterval(0),
+		progressbar.OptionSetPredictTime(true),
+		progressbar.OptionSetDescription("整体下载进度"),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "=",
 			SaucerHead:    ">",
@@ -524,9 +536,9 @@ func (c *Client) newFileProgressBar(total int) *progressbar.ProgressBar {
 	)
 }
 
-func addProgress(bar *progressbar.ProgressBar) {
-	if bar != nil {
-		_ = bar.Add(1)
+func addProgress64(bar *progressbar.ProgressBar, value int64) {
+	if bar != nil && value > 0 {
+		_ = bar.Add64(value)
 	}
 }
 
