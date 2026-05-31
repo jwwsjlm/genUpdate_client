@@ -2,8 +2,11 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +31,8 @@ type Options struct {
 	Concurrency        int
 	Writer             io.Writer
 	Progress           bool
+	ManifestPublicKey  string
+	ManifestKeyID      string
 }
 
 const MaxDownloadConcurrency = 16
@@ -41,6 +46,8 @@ type Client struct {
 	concurrency        int
 	writer             io.Writer
 	progress           bool
+	manifestPublicKey  ed25519.PublicKey
+	manifestKeyID      string
 	http               *req.Client
 	outputMu           sync.Mutex
 }
@@ -73,6 +80,10 @@ func New(options Options) (*Client, error) {
 	if concurrency > MaxDownloadConcurrency {
 		concurrency = MaxDownloadConcurrency
 	}
+	manifestPublicKey, err := DecodeEd25519PublicKey(options.ManifestPublicKey)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		baseURL:            strings.TrimSpace(options.BaseURL),
@@ -83,6 +94,8 @@ func New(options Options) (*Client, error) {
 		concurrency:        concurrency,
 		writer:             writer,
 		progress:           options.Progress,
+		manifestPublicKey:  manifestPublicKey,
+		manifestKeyID:      strings.TrimSpace(options.ManifestKeyID),
 		http: req.C().
 			SetTimeout(2*time.Minute).
 			SetCommonRetryCount(2).
@@ -111,7 +124,69 @@ func (c *Client) FetchManifest(ctx context.Context) (Manifest, error) {
 	if manifest.Ret != "ok" {
 		return Manifest{}, fmt.Errorf("server returned ret=%s", manifest.Ret)
 	}
+	if err := c.verifyManifest(manifest); err != nil {
+		return Manifest{}, err
+	}
 	return manifest, nil
+}
+
+func (c *Client) verifyManifest(manifest Manifest) error {
+	if len(c.manifestPublicKey) == 0 {
+		return nil
+	}
+	if !strings.EqualFold(manifest.SignatureAlgorithm, "ed25519") {
+		return fmt.Errorf("manifest signature algorithm %q is not supported", manifest.SignatureAlgorithm)
+	}
+	if c.manifestKeyID != "" && manifest.SignatureKeyID != c.manifestKeyID {
+		return fmt.Errorf("manifest signature key id mismatch: expected %q, got %q", c.manifestKeyID, manifest.SignatureKeyID)
+	}
+	signature, err := decodeTextBytes(manifest.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid manifest signature: %w", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return fmt.Errorf("invalid manifest signature length: got %d, want %d", len(signature), ed25519.SignatureSize)
+	}
+	payload, err := json.Marshal(manifest.AppList)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest payload: %w", err)
+	}
+	if !ed25519.Verify(c.manifestPublicKey, payload, signature) {
+		return fmt.Errorf("manifest signature verification failed")
+	}
+	return nil
+}
+
+func DecodeEd25519PublicKey(value string) (ed25519.PublicKey, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	key, err := decodeTextBytes(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid manifest public key: %w", err)
+	}
+	if len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid manifest public key length: got %d, want %d", len(key), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(key), nil
+}
+
+func decodeTextBytes(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, fmt.Errorf("empty value")
+	}
+	if decoded, err := base64.RawURLEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	if decoded, err := hex.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	return nil, fmt.Errorf("expected base64url, base64, or hex encoded bytes")
 }
 
 func (c *Client) Run(ctx context.Context) (Result, error) {

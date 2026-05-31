@@ -22,17 +22,25 @@ var showVersion bool
 var configPath string
 var targetProcess string
 var updateToken string
+var manifestPublicKey string
+var manifestKeyID string
 var processWaitTimeout time.Duration
 var concurrency int
 
 var version = "dev"
 
-const tokenEnvName = "GENUPDATE_TOKEN"
+const (
+	tokenEnvName             = "GENUPDATE_TOKEN"
+	manifestPublicKeyEnvName = "GENUPDATE_MANIFEST_SIGNING_PUBLIC_KEY"
+	manifestKeyIDEnvName     = "GENUPDATE_MANIFEST_SIGNING_KEY_ID"
+)
 
 type clientConfig struct {
 	BaseURL                   string `json:"url"`
 	AppName                   string `json:"name"`
 	Token                     string `json:"token"`
+	ManifestPublicKey         string `json:"manifestPublicKey"`
+	ManifestKeyID             string `json:"manifestKeyID"`
 	ProcessName               string `json:"process"`
 	Concurrency               int    `json:"concurrency"`
 	AutoYes                   *bool  `json:"autoYes"`
@@ -50,6 +58,8 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "显示更新器版本后退出")
 	flag.StringVar(&configPath, "config", "", "配置文件路径，默认读取程序同目录 genUpdate_client.json（如果存在）")
 	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
+	flag.StringVar(&manifestPublicKey, "manifest-public-key", "", "更新清单 Ed25519 签名公钥")
+	flag.StringVar(&manifestKeyID, "manifest-key-id", "", "更新清单签名 key id")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
 	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "等待目标进程退出的最长时间，例如: 2m；0 表示一直等待")
 	flag.IntVar(&concurrency, "concurrency", 1, "单个文件的并发下载连接数，1 表示单连接")
@@ -74,6 +84,8 @@ func main() {
 		BaseURL:            baseURL,
 		AppName:            appName,
 		Token:              updateToken,
+		ManifestPublicKey:  manifestPublicKey,
+		ManifestKeyID:      manifestKeyID,
 		ProcessName:        targetProcess,
 		WaitProcessTimeout: processWaitTimeout,
 		Concurrency:        concurrency,
@@ -182,6 +194,18 @@ func applyConfig(path string) error {
 	}
 	if envToken := strings.TrimSpace(os.Getenv(tokenEnvName)); envToken != "" && !flagProvided("token") {
 		updateToken = envToken
+	}
+	if cfg.ManifestPublicKey != "" && !flagProvided("manifest-public-key") {
+		manifestPublicKey = cfg.ManifestPublicKey
+	}
+	if envPublicKey := strings.TrimSpace(os.Getenv(manifestPublicKeyEnvName)); envPublicKey != "" && !flagProvided("manifest-public-key") {
+		manifestPublicKey = envPublicKey
+	}
+	if cfg.ManifestKeyID != "" && !flagProvided("manifest-key-id") {
+		manifestKeyID = cfg.ManifestKeyID
+	}
+	if envKeyID := strings.TrimSpace(os.Getenv(manifestKeyIDEnvName)); envKeyID != "" && !flagProvided("manifest-key-id") {
+		manifestKeyID = envKeyID
 	}
 	if cfg.ProcessName != "" && !flagProvided("process") {
 		targetProcess = cfg.ProcessName

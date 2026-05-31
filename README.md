@@ -9,6 +9,7 @@
 
 - 获取服务端更新清单：`/updateList/{appName}`
 - 支持 token 鉴权：`Authorization: Bearer <token>`，也可用环境变量 `GENUPDATE_TOKEN`
+- 支持 Ed25519 更新清单签名校验，配置服务端公钥后会验证 `/updateList/{appName}` 返回的 `signature`
 - 本地文件先比大小，再比 SHA256，未变化则跳过
 - 下载到 `.tmp` 临时文件，校验大小和 SHA256 后再替换目标文件
 - Windows 下替换目标文件失败时会短暂重试，降低临时占用导致的失败概率
@@ -97,6 +98,8 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 | `-url` | 是 | 更新服务端地址，例如 `http://localhost:8090` |
 | `-name` | 是 | 应用名称，必须和服务端应用名一致 |
 | `-token` | 否 | 服务端开启 token 后传入访问 token |
+| `-manifest-public-key` | 否 | 更新清单 Ed25519 签名公钥；配置后客户端会强制校验服务端返回的签名 |
+| `-manifest-key-id` | 否 | 更新清单签名 key id；配置后会要求服务端返回的 `signatureKeyID` 一致 |
 | `-config` | 否 | 配置文件路径；默认尝试读取程序同目录 `genUpdate_client.json` |
 | `-process` | 否 | 更新前等待退出的目标进程名，例如 `yourapp.exe` |
 | `-wait-timeout` | 否 | 等待目标进程退出的最长时间，例如 `2m`；`0` 表示一直等待 |
@@ -115,6 +118,8 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
   "url": "http://localhost:8090",
   "name": "星月",
   "token": "your-token",
+  "manifestPublicKey": "your-ed25519-public-key",
+  "manifestKeyID": "your-signing-key-id",
   "process": "yourapp.exe",
   "concurrency": 3,
   "waitProcessTimeoutSeconds": 120,
@@ -147,6 +152,14 @@ GENUPDATE_TOKEN=your-token ./genUpdate_client -url http://localhost:8090 -name �
 ```
 
 token 优先级为：命令行 `-token` > 环境变量 `GENUPDATE_TOKEN` > 配置文件 `token`。
+
+更新清单签名公钥也可以通过环境变量传入：
+
+```bash
+GENUPDATE_MANIFEST_SIGNING_PUBLIC_KEY=your-public-key ./genUpdate_client -url http://localhost:8090 -name 星月 -y -no-wait
+```
+
+可选配置 `GENUPDATE_MANIFEST_SIGNING_KEY_ID`，用于校验服务端返回的 `signatureKeyID`。公钥优先级为：命令行 `-manifest-public-key` > 环境变量 `GENUPDATE_MANIFEST_SIGNING_PUBLIC_KEY` > 配置文件 `manifestPublicKey`。
 
 ## 作为 Go 库使用
 
@@ -217,12 +230,13 @@ result, err := client.Update(context.Background(), manifest)
 
 1. 请求 `{url}/updateList/{name}` 获取清单
 2. 校验服务端返回状态
-3. 等待目标进程退出，如果设置了 `process`
-4. 按清单顺序逐个处理文件
-5. 本地文件大小一致时再计算 SHA256
-6. 需要更新时下载到 `.tmp`
-7. 下载后校验大小和 SHA256
-8. 校验通过后替换目标文件
+3. 如果配置了 `manifestPublicKey`，校验服务端返回的 Ed25519 签名
+4. 等待目标进程退出，如果设置了 `process`
+5. 按清单顺序逐个处理文件
+6. 本地文件大小一致时再计算 SHA256
+7. 需要更新时下载到 `.tmp`
+8. 下载后校验大小和 SHA256
+9. 校验通过后替换目标文件
 
 ## 服务端响应示例
 
@@ -245,7 +259,10 @@ result, err := client.Update(context.Background(), manifest)
       }
     ]
   },
-  "ret": "ok"
+  "ret": "ok",
+  "signature": "base64url-ed25519-signature",
+  "signatureAlgorithm": "ed25519",
+  "signatureKeyID": "your-signing-key-id"
 }
 ```
 
@@ -258,6 +275,8 @@ result, err := client.Update(context.Background(), manifest)
 
 为避免 token 泄漏，`downloadURL` 只允许相对路径，或与 `-url` 同源的绝对 URL。
 
+服务端开启清单签名后，签名内容是 `appList` 对应的 JSON。客户端配置公钥后会使用 Ed25519 验证 `signature`，签名不通过会拒绝更新。
+
 ## 安全性
 
 - 下载完成后必须通过 SHA256 校验，否则不会替换正式文件
@@ -265,8 +284,9 @@ result, err := client.Update(context.Background(), manifest)
 - 会拒绝路径穿越和绝对路径
 - 会拒绝跨域下载 URL，避免把 token 发送给第三方域名
 - token 通过 `Authorization: Bearer <token>` 发送
+- 配置 `manifestPublicKey` 后会强制校验更新清单签名，避免清单被中间人篡改
 
-建议生产环境使用 HTTPS，并妥善保护配置文件中的 token。
+建议生产环境使用 HTTPS，并妥善保护配置文件中的 token。签名私钥只应保存在服务端，客户端只配置公钥。
 
 ## 性能
 

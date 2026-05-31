@@ -1,8 +1,11 @@
 package updater
 
 type Manifest struct {
-	AppList AppList `json:"appList"`
-	Ret     string  `json:"ret"`
+	AppList            AppList `json:"appList"`
+	Ret                string  `json:"ret"`
+	Signature          string  `json:"signature,omitempty"`
+	SignatureAlgorithm string  `json:"signatureAlgorithm,omitempty"`
+	SignatureKeyID     string  `json:"signatureKeyID,omitempty"`
 }
 
 type ReleaseNote struct {
@@ -17,6 +20,7 @@ type File struct {
 	Size        int64  `json:"size"`
 	Sha256      string `json:"sha256"`
 	DownloadURL string `json:"downloadURL"`
+	ModTime     string `json:"modTime,omitempty"`
 }
 
 type AppList struct {

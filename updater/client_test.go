@@ -3,7 +3,10 @@ package updater
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -229,6 +232,92 @@ func TestClientSendsBearerTokenToManifestAndDownload(t *testing.T) {
 	}
 	if result.Downloaded != 1 || len(result.Failed) != 0 {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestFetchManifestVerifiesEd25519Signature(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey returned error: %v", err)
+	}
+	manifest := Manifest{
+		Ret: "ok",
+		AppList: AppList{
+			FileName:    "app",
+			ReleaseNote: ReleaseNote{AppName: "app", Version: "1.0.0"},
+			FileList: []File{{
+				Path:        filepath.ToSlash(filepath.Join("app", "payload.bin")),
+				Name:        "payload.bin",
+				Size:        7,
+				Sha256:      sha256Hex([]byte("payload")),
+				DownloadURL: "/download/payload.bin",
+			}},
+		},
+		SignatureAlgorithm: "ed25519",
+		SignatureKeyID:     "test-key",
+	}
+	payload, err := json.Marshal(manifest.AppList)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	manifest.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, payload))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(manifest)
+	}))
+	defer server.Close()
+
+	client, err := New(Options{
+		BaseURL:           server.URL,
+		AppName:           "app",
+		ManifestPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
+		ManifestKeyID:     "test-key",
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if _, err := client.FetchManifest(context.Background()); err != nil {
+		t.Fatalf("FetchManifest returned error: %v", err)
+	}
+}
+
+func TestFetchManifestRejectsInvalidSignature(t *testing.T) {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey returned error: %v", err)
+	}
+	_, otherPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey returned error: %v", err)
+	}
+	manifest := Manifest{
+		Ret:                "ok",
+		AppList:            AppList{FileName: "app", ReleaseNote: ReleaseNote{AppName: "app"}},
+		SignatureAlgorithm: "ed25519",
+		SignatureKeyID:     "test-key",
+	}
+	payload, err := json.Marshal(manifest.AppList)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	manifest.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(otherPrivateKey, payload))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(manifest)
+	}))
+	defer server.Close()
+
+	client, err := New(Options{
+		BaseURL:           server.URL,
+		AppName:           "app",
+		ManifestPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
+		ManifestKeyID:     "test-key",
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if _, err := client.FetchManifest(context.Background()); err == nil {
+		t.Fatalf("FetchManifest returned nil error")
 	}
 }
 

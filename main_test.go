@@ -42,6 +42,26 @@ func TestApplyConfigKeepsFlagTokenOverEnvironment(t *testing.T) {
 	}
 }
 
+func TestApplyConfigUsesManifestSigningEnvironment(t *testing.T) {
+	resetFlagsForTest(t)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"url":"https://updates.example.com","name":"app","manifestPublicKey":"config-public","manifestKeyID":"config-key"}`), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	t.Setenv(manifestPublicKeyEnvName, "env-public")
+	t.Setenv(manifestKeyIDEnvName, "env-key")
+
+	if err := applyConfig(configPath); err != nil {
+		t.Fatalf("applyConfig returned error: %v", err)
+	}
+	if manifestPublicKey != "env-public" {
+		t.Fatalf("manifestPublicKey = %q, want env-public", manifestPublicKey)
+	}
+	if manifestKeyID != "env-key" {
+		t.Fatalf("manifestKeyID = %q, want env-key", manifestKeyID)
+	}
+}
+
 func resetFlagsForTest(t *testing.T) {
 	t.Helper()
 	baseURL = ""
@@ -53,6 +73,8 @@ func resetFlagsForTest(t *testing.T) {
 	configPath = ""
 	targetProcess = ""
 	updateToken = ""
+	manifestPublicKey = ""
+	manifestKeyID = ""
 	processWaitTimeout = 0
 	concurrency = 1
 
@@ -64,6 +86,8 @@ func resetFlagsForTest(t *testing.T) {
 	flag.BoolVar(&skipWait, "no-wait", false, "")
 	flag.BoolVar(&noProgress, "no-progress", false, "")
 	flag.StringVar(&updateToken, "token", "", "")
+	flag.StringVar(&manifestPublicKey, "manifest-public-key", "", "")
+	flag.StringVar(&manifestKeyID, "manifest-key-id", "", "")
 	flag.StringVar(&targetProcess, "process", "", "")
 	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "")
 	flag.IntVar(&concurrency, "concurrency", 1, "")

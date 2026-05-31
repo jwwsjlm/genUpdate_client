@@ -2,6 +2,8 @@
   "url": "http://localhost:8090",
   "name": "星月",
   "token": "your-token",
+  "manifestPublicKey": "your-ed25519-public-key",
+  "manifestKeyID": "your-signing-key-id",
   "process": "yourapp.exe",
   "concurrency": 3,
   "waitProcessTimeoutSeconds": 120,
