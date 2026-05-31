@@ -599,6 +599,7 @@ type concurrentProgress struct {
 	order   []string
 	current string
 	bar     *progressbar.ProgressBar
+	barID   string
 }
 
 type progressState struct {
@@ -659,7 +660,7 @@ func (p *concurrentProgress) run() {
 		p.render(event.id)
 	}
 	if p.bar != nil {
-		_ = p.bar.Finish()
+		_ = p.bar.Clear()
 	}
 }
 
@@ -705,28 +706,30 @@ func (p *concurrentProgress) render(eventID string) {
 		p.selectCurrent(eventID)
 	}
 	if p.current == "" {
+		p.clearBar()
 		return
 	}
 
 	state := p.files[p.current]
+	if p.bar == nil || p.barID != p.current {
+		p.replaceBar(p.current, state)
+	}
+	_ = p.bar.Set64(state.current)
+}
+
+func (p *concurrentProgress) replaceBar(id string, state *progressState) {
+	p.clearBar()
+	p.bar = p.client.newRawDownloadProgressBar(state.total, state.name)
+	p.barID = id
+}
+
+func (p *concurrentProgress) clearBar() {
 	if p.bar == nil {
-		p.bar = p.client.newRawDownloadProgressBar(state.total, state.name)
-		_ = p.bar.Set64(state.current)
 		return
 	}
-
-	_ = p.bar.Set64(state.current)
-	if state.finished {
-		_ = p.bar.Finish()
-		p.bar = nil
-		p.current = ""
-		p.selectCurrent("")
-		if p.current != "" {
-			next := p.files[p.current]
-			p.bar = p.client.newRawDownloadProgressBar(next.total, next.name)
-			_ = p.bar.Set64(next.current)
-		}
-	}
+	_ = p.bar.Clear()
+	p.bar = nil
+	p.barID = ""
 }
 
 func (p *concurrentProgress) selectCurrent(preferredID string) {
