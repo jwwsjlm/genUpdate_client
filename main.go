@@ -18,11 +18,14 @@ var appName string
 var autoYes bool
 var skipWait bool
 var noProgress bool
+var showVersion bool
 var configPath string
 var targetProcess string
 var updateToken string
 var processWaitTimeout time.Duration
 var concurrency int
+
+var version = "dev"
 
 type clientConfig struct {
 	BaseURL                   string `json:"url"`
@@ -42,6 +45,7 @@ func init() {
 	flag.BoolVar(&autoYes, "y", false, "自动确认更新，无需交互")
 	flag.BoolVar(&skipWait, "no-wait", false, "程序结束后立即退出，不等待回车")
 	flag.BoolVar(&noProgress, "no-progress", false, "关闭动态进度条，适合第三方程序调用或日志重定向")
+	flag.BoolVar(&showVersion, "version", false, "显示更新器版本后退出")
 	flag.StringVar(&configPath, "config", "", "配置文件路径，默认读取程序同目录 genUpdate_client.json（如果存在）")
 	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
@@ -51,6 +55,11 @@ func init() {
 
 func main() {
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("更新器版本:%s\n", version)
+		return
+	}
 
 	if err := applyConfig(configPath); err != nil {
 		fmt.Println("读取配置失败", err)
@@ -82,9 +91,9 @@ func main() {
 		return
 	}
 
+	fmt.Printf("更新器版本:%s \n", version)
 	fmt.Printf("软件名称:%s \n", manifest.AppList.ReleaseNote.AppName)
 	fmt.Printf("软件公告:%s \n", manifest.AppList.ReleaseNote.Description)
-	fmt.Printf("软件当前版本:%s \n", currentAppVersion(targetProcess))
 	fmt.Printf("软件最新版本:%s \n", manifest.AppList.ReleaseNote.Version)
 
 	if !autoYes {
@@ -136,35 +145,6 @@ func waitForExit(skip bool) {
 
 	fmt.Println("\n按 Enter 键以退出...")
 	_, _ = fmt.Scanln()
-}
-
-func currentAppVersion(processName string) string {
-	processName = strings.TrimSpace(processName)
-	if processName == "" {
-		return "未知（未设置 -process）"
-	}
-
-	version, err := GetExeVersion(resolveTargetExecutablePath(processName))
-	if err != nil {
-		return "未知"
-	}
-	return version
-}
-
-func resolveTargetExecutablePath(processName string) string {
-	if filepath.IsAbs(processName) {
-		return processName
-	}
-
-	if _, err := os.Stat(processName); err == nil {
-		return processName
-	}
-
-	exe, err := os.Executable()
-	if err != nil {
-		return processName
-	}
-	return filepath.Join(filepath.Dir(exe), processName)
 }
 
 func applyConfig(path string) error {
