@@ -295,7 +295,7 @@ func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
 	}
 }
 
-func TestConcurrentProgressFollowsLatestActiveFile(t *testing.T) {
+func TestConcurrentProgressPrioritizesNearestCompletion(t *testing.T) {
 	client, err := New(Options{
 		BaseURL:     "https://updates.example.com",
 		AppName:     "app",
@@ -318,8 +318,8 @@ func TestConcurrentProgressFollowsLatestActiveFile(t *testing.T) {
 	progress.apply(progressEvent{id: "large", name: "large.bin", total: 100, current: 0, set: true})
 	progress.apply(progressEvent{id: "small", name: "small.bin", total: 10, current: 0, set: true})
 	progress.render("large")
-	if progress.current != "large" || progress.barID != "large" {
-		t.Fatalf("current = %q, barID = %q, want large", progress.current, progress.barID)
+	if progress.current != "small" || progress.barID != "small" {
+		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
 	}
 
 	progress.apply(progressEvent{id: "small", current: 5, set: true})
@@ -330,8 +330,8 @@ func TestConcurrentProgressFollowsLatestActiveFile(t *testing.T) {
 
 	progress.apply(progressEvent{id: "large", current: 50, set: true})
 	progress.render("large")
-	if progress.current != "large" || progress.barID != "large" {
-		t.Fatalf("current = %q, barID = %q, want large", progress.current, progress.barID)
+	if progress.current != "small" || progress.barID != "small" {
+		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
 	}
 	if got := progress.files["large"].current; got != 50 {
 		t.Fatalf("large progress = %d, want 50", got)

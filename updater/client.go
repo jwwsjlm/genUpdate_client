@@ -518,6 +518,7 @@ func (c *Client) newRawDownloadProgressBar(size int64, file string) *progressbar
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetWidth(20),
 		progressbar.OptionSetSpinnerChangeInterval(0),
+		progressbar.OptionThrottle(200*time.Millisecond),
 		progressbar.OptionSetPredictTime(true),
 		progressbar.OptionSetDescription("正在下载 ["+filepath.Base(file)+"]"),
 		progressbar.OptionSetTheme(progressbar.Theme{
@@ -611,6 +612,17 @@ type progressState struct {
 	total    int64
 	current  int64
 	finished bool
+}
+
+func (s *progressState) remaining() int64 {
+	if s == nil || s.total <= 0 {
+		return 1<<63 - 1
+	}
+	remaining := s.total - s.current
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 type progressEvent struct {
@@ -712,27 +724,31 @@ func (p *concurrentProgress) apply(event progressEvent) {
 }
 
 func (p *concurrentProgress) render(eventID string) {
-	if p.shouldSwitchTo(eventID) {
-		p.selectCurrent(eventID)
+	state := p.files[eventID]
+	if p.shouldSwitchTo(eventID, state) {
+		p.selectCurrent()
 	}
 	if p.current == "" {
 		p.clearBar()
 		return
 	}
 
-	state := p.files[p.current]
+	currentState := p.files[p.current]
 	if p.bar == nil || p.barID != p.current {
-		p.replaceBar(p.current, state)
+		p.replaceBar(p.current, currentState)
 	}
-	_ = p.bar.Set64(state.current)
+	_ = p.bar.Set64(currentState.current)
 }
 
-func (p *concurrentProgress) shouldSwitchTo(eventID string) bool {
-	state := p.files[eventID]
-	if state != nil && !state.finished && eventID != p.current {
+func (p *concurrentProgress) shouldSwitchTo(eventID string, eventState *progressState) bool {
+	if p.current == "" || p.files[p.current] == nil || p.files[p.current].finished {
 		return true
 	}
-	return p.current == "" || p.files[p.current] == nil || p.files[p.current].finished
+	if eventState == nil || eventState.finished || eventID == p.current {
+		return false
+	}
+	current := p.files[p.current]
+	return eventState.remaining() < current.remaining()
 }
 
 func (p *concurrentProgress) replaceBar(id string, state *progressState) {
@@ -750,19 +766,20 @@ func (p *concurrentProgress) clearBar() {
 	p.barID = ""
 }
 
-func (p *concurrentProgress) selectCurrent(preferredID string) {
-	if state := p.files[preferredID]; state != nil && !state.finished {
-		p.current = preferredID
-		return
-	}
+func (p *concurrentProgress) selectCurrent() {
+	var selectedID string
+	var selectedState *progressState
 	for _, id := range p.order {
 		state := p.files[id]
-		if !state.finished {
-			p.current = id
-			return
+		if state == nil || state.finished {
+			continue
+		}
+		if selectedState == nil || state.remaining() < selectedState.remaining() {
+			selectedID = id
+			selectedState = state
 		}
 	}
-	p.current = ""
+	p.current = selectedID
 }
 
 type downloadReporter struct {
