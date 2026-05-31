@@ -50,7 +50,7 @@ func init() {
 	flag.StringVar(&updateToken, "token", "", "更新服务端访问 token")
 	flag.StringVar(&targetProcess, "process", "", "更新前等待退出的目标进程名，例如: yourapp.exe")
 	flag.DurationVar(&processWaitTimeout, "wait-timeout", 0, "等待目标进程退出的最长时间，例如: 2m；0 表示一直等待")
-	flag.IntVar(&concurrency, "concurrency", 1, "并发下载数量，1 表示顺序下载")
+	flag.IntVar(&concurrency, "concurrency", 1, "单个文件的并发下载连接数，1 表示单连接")
 }
 
 func main() {

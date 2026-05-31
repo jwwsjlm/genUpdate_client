@@ -12,9 +12,9 @@
 - 本地文件先比大小，再比 SHA256，未变化则跳过
 - 下载到 `.tmp` 临时文件，校验大小和 SHA256 后再替换目标文件
 - 支持断点续传，服务端支持 `Range` 时会从 `.tmp` 已下载位置继续
-- 支持按文件并发下载：`-concurrency`
+- 支持单文件多连接下载：`-concurrency` 表示当前文件的分片下载连接数
 - 进度条显示已下载/总大小、下载速度和预计剩余时间
-- 并发下载时每个正在下载的文件各显示一条进度，并在完成后提示剩余待更新文件数
+- 文件按清单顺序逐个处理，避免多个文件的进度和日志互相穿插
 - 支持等待目标软件进程退出，避免 Windows 文件占用导致替换失败
 - 运行时会输出更新器自身版本和服务端最新软件版本，便于确认是否拿到新版客户端
 - 支持动态进度条；也可用 `-no-progress` 关闭，便于第三方程序调用或日志重定向
@@ -77,7 +77,7 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 ./genUpdate_client -url http://localhost:8090 -name 星月 -process yourapp.exe -wait-timeout 2m -y -no-wait
 ```
 
-并发下载：
+单文件多连接下载：
 
 ```bash
 ./genUpdate_client -url http://localhost:8090 -name 星月 -concurrency 3 -y -no-wait
@@ -99,7 +99,7 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 | `-config` | 否 | 配置文件路径；默认尝试读取程序同目录 `genUpdate_client.json` |
 | `-process` | 否 | 更新前等待退出的目标进程名，例如 `yourapp.exe` |
 | `-wait-timeout` | 否 | 等待目标进程退出的最长时间，例如 `2m`；`0` 表示一直等待 |
-| `-concurrency` | 否 | 并发下载数量，默认 `1` 表示顺序下载 |
+| `-concurrency` | 否 | 单个文件的并发下载连接数，默认 `1`；文件本身仍按清单顺序逐个下载 |
 | `-y` | 否 | 自动确认更新，不等待用户输入 Y/N |
 | `-no-wait` | 否 | 程序结束后立即退出 |
 | `-no-progress` | 否 | 关闭动态进度条，适合第三方程序调用、日志重定向或不支持动态刷新的终端 |
@@ -209,7 +209,7 @@ result, err := client.Update(context.Background(), manifest)
 1. 请求 `{url}/updateList/{name}` 获取清单
 2. 校验服务端返回状态
 3. 等待目标进程退出，如果设置了 `process`
-4. 逐个或并发处理文件
+4. 按清单顺序逐个处理文件
 5. 本地文件大小一致时再计算 SHA256
 6. 需要更新时下载到 `.tmp`
 7. 下载后校验大小和 SHA256
@@ -264,8 +264,8 @@ result, err := client.Update(context.Background(), manifest)
 - 大文件下载使用流式复制，不会把文件整体读入内存
 - SHA256 使用流式计算
 - 本地文件先比较大小，大小不一致时不再计算 SHA256
-- `-concurrency` 可以提升多文件下载速度
-- 默认顺序下载，输出更清晰，也减少对服务端的瞬时压力
+- `-concurrency` 可以提升单个大文件的下载速度，前提是服务端支持 `Range`
+- 多个文件不会同时下载，输出更清晰，也减少日志交错
 
 ## 发布新版本
 
@@ -305,7 +305,7 @@ Release 包会通过 GoReleaser 把 tag 版本注入到二进制里，例如 `0.
 
 ### 并发越高越好吗
 
-不一定。并发会增加服务端压力，也会让日志更密集。一般建议从 `2` 或 `3` 开始。并发模式下每个正在下载的文件各显示一条进度，进度条总大小就是当前文件大小，不再使用整个项目的总大小。
+不一定。`-concurrency` 表示单个文件同时使用多少个 Range 连接下载，不是同时下载多少个文件。一般建议从 `2` 或 `3` 开始；服务端不支持 `Range` 时会自动回退为单连接下载。多个文件始终按清单顺序处理，所以终端里只会出现当前文件的一条进度。
 
 ### 进度条停在 50% 是卡死了吗
 

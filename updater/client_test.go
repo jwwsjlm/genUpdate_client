@@ -6,11 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBuildUpdateListURL(t *testing.T) {
@@ -241,7 +247,7 @@ func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
 	}
 
 	target := filepath.Join(t.TempDir(), "payload.bin")
-	err = client.downloadFile(context.Background(), server.URL, target, int64(len(body)+1), expectedSHA, nil)
+	err = client.downloadFile(context.Background(), server.URL, target, int64(len(body)+1), expectedSHA)
 	if err == nil {
 		t.Fatalf("downloadFile returned nil error")
 	}
@@ -282,7 +288,7 @@ func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
 	if err := os.WriteFile(target+".tmp", body[:offset], 0o644); err != nil {
 		t.Fatalf("failed to write temporary file: %v", err)
 	}
-	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA, nil); err != nil {
+	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA); err != nil {
 		t.Fatalf("downloadFile returned error: %v", err)
 	}
 
@@ -295,112 +301,212 @@ func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
 	}
 }
 
-func TestConcurrentProgressPrioritizesNearestCompletion(t *testing.T) {
-	client, err := New(Options{
-		BaseURL:     "https://updates.example.com",
-		AppName:     "app",
-		Writer:      bytes.NewBuffer(nil),
-		Progress:    true,
-		Concurrency: 2,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-
-	progress := &concurrentProgress{
-		client: client,
-		events: make(chan progressEvent, 8),
-		done:   make(chan struct{}),
-		files:  make(map[string]*progressState),
-		order:  make([]string, 0, 2),
-	}
-
-	progress.apply(progressEvent{id: "large", name: "large.bin", total: 100, current: 0, set: true})
-	progress.apply(progressEvent{id: "small", name: "small.bin", total: 10, current: 0, set: true})
-	progress.render("large")
-	if progress.current != "small" || progress.barID != "small" {
-		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
-	}
-
-	progress.apply(progressEvent{id: "small", current: 5, set: true})
-	progress.render("small")
-	if progress.current != "small" || progress.barID != "small" {
-		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
-	}
-
-	progress.apply(progressEvent{id: "large", current: 50, set: true})
-	progress.render("large")
-	if progress.current != "small" || progress.barID != "small" {
-		t.Fatalf("current = %q, barID = %q, want small", progress.current, progress.barID)
-	}
-	if got := progress.files["large"].current; got != 50 {
-		t.Fatalf("large progress = %d, want 50", got)
-	}
-
-	progress.apply(progressEvent{id: "small", current: 10, set: true, finished: true})
-	progress.render("small")
-	if progress.current != "large" || progress.barID != "large" {
-		t.Fatalf("current = %q, barID = %q, want large", progress.current, progress.barID)
-	}
-}
-
-func TestConcurrentProgressDoesNotRenderInitialZeroState(t *testing.T) {
-	event := progressEvent{id: "file", name: "file.bin", total: 100, current: 0, set: true}
-	if event.shouldRender() {
-		t.Fatalf("initial zero progress event should not render")
-	}
-	if !(progressEvent{id: "file", delta: 1}).shouldRender() {
-		t.Fatalf("delta progress event should render")
-	}
-	if !(progressEvent{id: "file", current: 10, set: true}).shouldRender() {
-		t.Fatalf("resumed progress event should render")
-	}
-	if !(progressEvent{id: "file", finished: true}).shouldRender() {
-		t.Fatalf("finished progress event should render")
-	}
-}
-
-func TestConcurrentDownloadReporterFinishesOnceAcrossRangeRetry(t *testing.T) {
-	client, err := New(Options{
-		BaseURL:     "https://updates.example.com",
-		AppName:     "app",
-		Writer:      bytes.NewBuffer(nil),
-		Progress:    true,
-		Concurrency: 2,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-
-	progress := client.newConcurrentProgress()
-	if progress == nil {
-		t.Fatalf("newConcurrentProgress returned nil")
-	}
-
-	target := filepath.Join(t.TempDir(), "payload.bin")
-	if err := os.WriteFile(target+".tmp", []byte("partial"), 0o644); err != nil {
-		t.Fatalf("failed to write temporary file: %v", err)
-	}
+func TestDownloadFileUsesParallelRangeRequests(t *testing.T) {
+	body := []byte("hello world")
+	expectedSHA := sha256Hex(body)
+	var mu sync.Mutex
+	ranges := make([]string, 0, 4)
+	var active int
+	var maxActive int
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Range") != "" {
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader == "" {
+			_, _ = w.Write(body)
+			return
+		}
+
+		start, end, ok := parseRangeHeader(t, rangeHeader)
+		if !ok {
 			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
-		_, _ = w.Write([]byte("fresh"))
+		if start < 0 || end >= int64(len(body)) || start > end {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+
+		mu.Lock()
+		ranges = append(ranges, rangeHeader)
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(body[start : end+1])
+
+		mu.Lock()
+		active--
+		mu.Unlock()
 	}))
 	defer server.Close()
 
-	err = client.downloadToTemp(context.Background(), server.URL, target+".tmp", int64(len("fresh")), target, progress)
+	client, err := New(Options{
+		BaseURL:     server.URL,
+		AppName:     "app",
+		Writer:      bytes.NewBuffer(nil),
+		Concurrency: 3,
+	})
 	if err != nil {
-		t.Fatalf("downloadToTemp returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
-	progress.Close()
-	state := progress.files[target]
-	if state == nil || !state.finished {
-		t.Fatalf("progress state = %+v, want finished", state)
+	target := filepath.Join(t.TempDir(), "payload.bin")
+	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA); err != nil {
+		t.Fatalf("downloadFile returned error: %v", err)
 	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read target: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("target content = %q, want %q", string(got), string(body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	sort.Strings(ranges)
+	wantRanges := []string{"bytes=0-0", "bytes=0-3", "bytes=4-7", "bytes=8-10"}
+	sort.Strings(wantRanges)
+	if strings.Join(ranges, ",") != strings.Join(wantRanges, ",") {
+		t.Fatalf("range requests = %v, want %v", ranges, wantRanges)
+	}
+	if maxActive < 2 {
+		t.Fatalf("range requests were not parallel, max active = %d", maxActive)
+	}
+}
+
+func TestDownloadFileFallsBackWhenRangeUnsupported(t *testing.T) {
+	body := []byte("fallback payload")
+	expectedSHA := sha256Hex(body)
+	var mu sync.Mutex
+	rangeHeaders := make([]string, 0, 2)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		rangeHeaders = append(rangeHeaders, r.Header.Get("Range"))
+		mu.Unlock()
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	client, err := New(Options{
+		BaseURL:     server.URL,
+		AppName:     "app",
+		Writer:      bytes.NewBuffer(nil),
+		Concurrency: 3,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	target := filepath.Join(t.TempDir(), "payload.bin")
+	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA); err != nil {
+		t.Fatalf("downloadFile returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read target: %v", err)
+	}
+	if string(got) != string(body) {
+		t.Fatalf("target content = %q, want %q", string(got), string(body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rangeHeaders) != 2 {
+		t.Fatalf("requests = %v, want probe plus sequential download", rangeHeaders)
+	}
+	if rangeHeaders[0] != "bytes=0-0" || rangeHeaders[1] != "" {
+		t.Fatalf("range headers = %v, want [bytes=0-0 \"\"]", rangeHeaders)
+	}
+}
+
+func TestUpdateProcessesFilesSequentiallyEvenWithConcurrency(t *testing.T) {
+	first := []byte("first payload")
+	second := []byte("second payload")
+	var firstDone atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/download/first.bin":
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write(first)
+			firstDone.Store(true)
+		case "/download/second.bin":
+			if !firstDone.Load() {
+				t.Fatalf("second download started before first download finished")
+			}
+			_, _ = w.Write(second)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Chdir(t.TempDir())
+	client, err := New(Options{
+		BaseURL:     server.URL,
+		AppName:     "app",
+		Writer:      bytes.NewBuffer(nil),
+		Concurrency: 4,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := client.Update(context.Background(), Manifest{
+		Ret: "ok",
+		AppList: AppList{FileList: []File{
+			{
+				Path:        filepath.ToSlash(filepath.Join("app", "first.bin")),
+				Name:        "first.bin",
+				Size:        int64(len(first)),
+				Sha256:      sha256Hex(first),
+				DownloadURL: "/download/first.bin",
+			},
+			{
+				Path:        filepath.ToSlash(filepath.Join("app", "second.bin")),
+				Name:        "second.bin",
+				Size:        int64(len(second)),
+				Sha256:      sha256Hex(second),
+				DownloadURL: "/download/second.bin",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if result.Downloaded != 2 || result.Skipped != 0 || len(result.Failed) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func parseRangeHeader(t *testing.T, header string) (int64, int64, bool) {
+	t.Helper()
+	value, ok := strings.CutPrefix(header, "bytes=")
+	if !ok {
+		return 0, 0, false
+	}
+	startText, endText, ok := strings.Cut(value, "-")
+	if !ok {
+		return 0, 0, false
+	}
+
+	var start, end int64
+	if _, err := fmt.Sscanf(startText, "%d", &start); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(endText, "%d", &end); err != nil {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func sha256Hex(body []byte) string {

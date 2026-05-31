@@ -50,12 +50,6 @@ const (
 	fileDownloaded
 )
 
-type fileOutcome struct {
-	file   File
-	action fileAction
-	err    error
-}
-
 func New(options Options) (*Client, error) {
 	if strings.TrimSpace(options.BaseURL) == "" {
 		return nil, fmt.Errorf("base url is required")
@@ -133,84 +127,20 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 	files := manifest.AppList.FileList
 	result := Result{Total: len(files)}
 
-	if c.concurrency > 1 {
-		return c.updateConcurrent(ctx, files, result)
-	}
-
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 
-		action, err := c.updateFile(ctx, file, nil)
+		action, err := c.updateFile(ctx, file)
 		c.recordFileResult(&result, file, action, err)
-		c.printFileResult(nil, result, file, err)
+		c.printFileResult(result, file, err)
 	}
 
 	if len(result.Failed) > 0 {
 		return result, UpdateError{Failures: result.Failed}
 	}
 	return result, nil
-}
-
-func (c *Client) updateConcurrent(ctx context.Context, files []File, result Result) (Result, error) {
-	workerCount := c.concurrency
-	if workerCount > len(files) {
-		workerCount = len(files)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
-
-	progress := c.newConcurrentProgress()
-	c.progressPrintf(progress, "并发下载模式: 共%d 个文件，并发数:%d\n", len(files), workerCount)
-
-	jobs := make(chan File)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	outcomes := make([]fileOutcome, 0, len(files))
-
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for file := range jobs {
-				if err := ctx.Err(); err != nil {
-					mu.Lock()
-					result.Failed = append(result.Failed, FileError{File: file, Err: err})
-					outcomes = append(outcomes, fileOutcome{file: file, err: err})
-					mu.Unlock()
-					continue
-				}
-
-				action, err := c.updateFile(ctx, file, progress)
-				mu.Lock()
-				c.recordFileResult(&result, file, action, err)
-				outcomes = append(outcomes, fileOutcome{file: file, action: action, err: err})
-				mu.Unlock()
-			}
-		}()
-	}
-
-sendJobs:
-	for _, file := range files {
-		select {
-		case <-ctx.Done():
-			break sendJobs
-		case jobs <- file:
-		}
-	}
-	close(jobs)
-	wg.Wait()
-	if progress != nil {
-		progress.Close()
-	}
-	c.printConcurrentOutcomes(outcomes)
-
-	if len(result.Failed) > 0 {
-		return result, UpdateError{Failures: result.Failed}
-	}
-	return result, ctx.Err()
 }
 
 func (c *Client) recordFileResult(result *Result, file File, action fileAction, err error) {
@@ -225,27 +155,14 @@ func (c *Client) recordFileResult(result *Result, file File, action fileAction, 
 	result.Skipped++
 }
 
-func (c *Client) printFileResult(progress *concurrentProgress, result Result, file File, err error) {
+func (c *Client) printFileResult(result Result, file File, err error) {
 	if err != nil {
-		c.progressPrintf(progress, "文件下载失败: %s, 错误: %v\n", file.Name, err)
+		c.printf("文件下载失败: %s, 错误: %v\n", file.Name, err)
 	}
-	c.progressPrintf(progress, "剩余待更新文件:%d (已下载:%d, 已跳过:%d, 失败:%d)\n", result.remaining(), result.Downloaded, result.Skipped, len(result.Failed))
+	c.printf("剩余待更新文件:%d (已下载:%d, 已跳过:%d, 失败:%d)\n", result.remaining(), result.Downloaded, result.Skipped, len(result.Failed))
 }
 
-func (c *Client) printConcurrentOutcomes(outcomes []fileOutcome) {
-	for _, outcome := range outcomes {
-		switch {
-		case outcome.err != nil:
-			c.printf("文件下载失败: %s, 错误: %v\n", outcome.file.Name, outcome.err)
-		case outcome.action == fileDownloaded:
-			c.printf("文件名%s, 下载完成并校验通过\n", outcome.file.Name)
-		default:
-			c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", outcome.file.Name)
-		}
-	}
-}
-
-func (c *Client) updateFile(ctx context.Context, file File, progress *concurrentProgress) (fileAction, error) {
+func (c *Client) updateFile(ctx context.Context, file File) (fileAction, error) {
 	downloadURL, err := BuildDownloadURL(c.baseURL, file.DownloadURL)
 	if err != nil {
 		return fileSkipped, err
@@ -255,51 +172,35 @@ func (c *Client) updateFile(ctx context.Context, file File, progress *concurrent
 		return fileSkipped, fmt.Errorf("failed to resolve file path: %w", err)
 	}
 
-	if progress == nil {
-		c.println("--------------------------------------------------------------------")
-	}
+	c.println("--------------------------------------------------------------------")
 	if fileExists(relativePath) {
 		localSize, err := fileSize(relativePath)
 		if err != nil {
-			if progress == nil {
-				c.printf("读取本地文件大小错误:%s, 重新下载\n", err)
-			}
+			c.printf("读取本地文件大小错误:%s, 重新下载\n", err)
 		} else if localSize != file.Size {
-			if progress == nil {
-				c.printf("文件名[%s], 已存在，但大小不一致，准备重新下载\n", file.Name)
-			}
+			c.printf("文件名[%s], 已存在，但大小不一致，准备重新下载\n", file.Name)
 		} else {
 			sha, err := CalculateFileSHA256(relativePath)
 			if err != nil {
-				if progress == nil {
-					c.printf("计算 SHA256 错误:%s, 重新下载\n", err)
-				}
+				c.printf("计算 SHA256 错误:%s, 重新下载\n", err)
 			} else if !strings.EqualFold(sha, file.Sha256) {
-				if progress == nil {
-					c.printf("文件名[%s], 已存在，但本地和云端不一致，准备重新下载\n", file.Name)
-				}
+				c.printf("文件名[%s], 已存在，但本地和云端不一致，准备重新下载\n", file.Name)
 			} else {
-				if progress == nil {
-					c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", file.Name)
-				}
+				c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", file.Name)
 				return fileSkipped, nil
 			}
 		}
 	}
 
-	if progress == nil {
-		c.progressPrintf(nil, "开始下载文件[%s]\n文件 SHA256:%s\n文件大小:%s\n", file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
-	}
-	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256, progress); err != nil {
+	c.printf("开始下载文件[%s]\n文件 SHA256:%s\n文件大小:%s\n", file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
+	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256); err != nil {
 		return fileSkipped, err
 	}
-	if progress == nil {
-		c.printf("文件名%s, 下载完成并校验通过\n", file.Name)
-	}
+	c.printf("文件名%s, 下载完成并校验通过\n", file.Name)
 	return fileDownloaded, nil
 }
 
-func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string, progress *concurrentProgress) (err error) {
+func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string) (err error) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
@@ -316,7 +217,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 			return fmt.Errorf("invalid sha256 checksum %q: %w", expectedSHA256, err)
 		}
 	}
-	if err := c.downloadToTemp(ctx, url, tmpFile, size, file, progress); err != nil {
+	if err := c.downloadToTemp(ctx, url, tmpFile, size, file); err != nil {
 		return err
 	}
 
@@ -342,14 +243,15 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 	return nil
 }
 
-func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string, progress *concurrentProgress) (err error) {
-	reporter := newConcurrentDownloadReporter(progress, size, targetFile)
-	if reporter != nil {
-		defer func() {
-			reporter.Finish(err == nil)
-		}()
+func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string) error {
+	if c.concurrency > 1 && size > 0 {
+		return c.downloadToTempParallel(ctx, downloadURL, tmpFile, size, targetFile)
 	}
 
+	return c.downloadToTempSequential(ctx, downloadURL, tmpFile, size, targetFile)
+}
+
+func (c *Client) downloadToTempSequential(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string) (err error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		offset := int64(0)
 		if info, statErr := os.Stat(tmpFile); statErr == nil {
@@ -373,10 +275,6 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 				}
 			}()
 		}
-		if reporter != nil {
-			reporter.Set(offset)
-		}
-
 		request := c.authorize(c.http.R().
 			SetContext(ctx).
 			DisableAutoReadResponse())
@@ -402,8 +300,6 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 			_ = os.Remove(tmpFile)
 			if bar != nil {
 				_ = bar.Set64(0)
-			} else if reporter != nil {
-				reporter.Set(0)
 			}
 		}
 		if offset > 0 && response.StatusCode != http.StatusPartialContent {
@@ -430,8 +326,6 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		writer := io.Writer(out)
 		if bar != nil {
 			writer = io.MultiWriter(out, progressWriter{add: func(n int) { _ = bar.Add(n) }})
-		} else if reporter != nil {
-			writer = io.MultiWriter(out, progressWriter{add: reporter.Add})
 		}
 		_, copyErr := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024))
 		closeBodyErr := response.Body.Close()
@@ -449,6 +343,171 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		return nil
 	}
 	return fmt.Errorf("failed to resume download after retry")
+}
+
+func (c *Client) downloadToTempParallel(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string) error {
+	_ = os.Remove(tmpFile)
+
+	workers := c.concurrency
+	if workers < 1 {
+		workers = 1
+	}
+	if int64(workers) > size {
+		workers = int(size)
+	}
+	if workers <= 1 {
+		return c.downloadToTempSequential(ctx, downloadURL, tmpFile, size, targetFile)
+	}
+
+	if ok, err := c.supportsRange(ctx, downloadURL, size); err != nil {
+		return err
+	} else if !ok {
+		return c.downloadToTempSequential(ctx, downloadURL, tmpFile, size, targetFile)
+	}
+
+	c.cleanupParts(tmpFile, workers)
+	bar := c.newDownloadProgressBar(size, targetFile)
+	if bar != nil {
+		defer func() {
+			_ = bar.Finish()
+		}()
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	partSize := (size + int64(workers) - 1) / int64(workers)
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	var barMu sync.Mutex
+	for i := 0; i < workers; i++ {
+		start := int64(i) * partSize
+		end := start + partSize - 1
+		if end >= size {
+			end = size - 1
+		}
+		if start > end {
+			continue
+		}
+
+		partFile := fmt.Sprintf("%s.part%d", tmpFile, i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := c.downloadRange(ctx, downloadURL, partFile, start, end, bar, &barMu); err != nil {
+				cancel()
+				errCh <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		c.cleanupParts(tmpFile, workers)
+		return err
+	}
+
+	if err := c.mergeParts(tmpFile, workers); err != nil {
+		c.cleanupParts(tmpFile, workers)
+		return err
+	}
+	return nil
+}
+
+func (c *Client) supportsRange(ctx context.Context, downloadURL string, size int64) (bool, error) {
+	resp, err := c.authorize(c.http.R().
+		SetContext(ctx).
+		SetHeader("Range", "bytes=0-0").
+		DisableAutoReadResponse()).
+		Get(downloadURL)
+	if err != nil {
+		return false, fmt.Errorf("failed to probe range support: %w", err)
+	}
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return false, nil
+	}
+	contentRange := resp.Header.Get("Content-Range")
+	return strings.HasSuffix(contentRange, fmt.Sprintf("/%d", size)), nil
+}
+
+func (c *Client) downloadRange(ctx context.Context, downloadURL, partFile string, start, end int64, bar *progressbar.ProgressBar, barMu *sync.Mutex) error {
+	_ = os.Remove(partFile)
+	request := c.authorize(c.http.R().
+		SetContext(ctx).
+		SetHeader("Range", fmt.Sprintf("bytes=%d-%d", start, end)).
+		DisableAutoReadResponse())
+
+	response, err := request.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download range %d-%d: %w", start, end, err)
+	}
+	if response.Body == nil {
+		return fmt.Errorf("download response body is empty, range:%d-%d", start, end)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("range download failed with status code: %d, range:%d-%d", response.StatusCode, start, end)
+	}
+
+	out, err := os.OpenFile(partFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open part file: %w", err)
+	}
+	defer out.Close()
+
+	writer := io.Writer(out)
+	if bar != nil {
+		writer = io.MultiWriter(out, progressWriter{add: func(n int) {
+			barMu.Lock()
+			defer barMu.Unlock()
+			_ = bar.Add(n)
+		}})
+	}
+	if _, err := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024)); err != nil {
+		return fmt.Errorf("failed to write part file: %w", err)
+	}
+	if info, err := out.Stat(); err != nil {
+		return fmt.Errorf("failed to stat part file: %w", err)
+	} else if want := end - start + 1; info.Size() != want {
+		return fmt.Errorf("range size mismatch %d-%d: expected %d, got %d", start, end, want, info.Size())
+	}
+	return nil
+}
+
+func (c *Client) mergeParts(tmpFile string, workers int) error {
+	out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer out.Close()
+
+	for i := 0; i < workers; i++ {
+		partFile := fmt.Sprintf("%s.part%d", tmpFile, i)
+		part, err := os.Open(partFile)
+		if err != nil {
+			return fmt.Errorf("failed to open part file: %w", err)
+		}
+		if _, err := io.CopyBuffer(out, part, make([]byte, 1024*1024)); err != nil {
+			_ = part.Close()
+			return fmt.Errorf("failed to merge part file: %w", err)
+		}
+		if err := part.Close(); err != nil {
+			return fmt.Errorf("failed to close part file: %w", err)
+		}
+		_ = os.Remove(partFile)
+	}
+	return nil
+}
+
+func (c *Client) cleanupParts(tmpFile string, workers int) {
+	for i := 0; i < workers; i++ {
+		_ = os.Remove(fmt.Sprintf("%s.part%d", tmpFile, i))
+	}
 }
 
 func BuildUpdateListURL(base, app string) (string, error) {
@@ -536,7 +595,7 @@ func CalculateFileSHA256(path string) (string, error) {
 }
 
 func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.ProgressBar {
-	if !c.progress || c.concurrency > 1 {
+	if !c.progress {
 		return nil
 	}
 	return c.newRawDownloadProgressBar(size, file)
@@ -552,6 +611,9 @@ func (c *Client) newRawDownloadProgressBar(size int64, file string) *progressbar
 		progressbar.OptionThrottle(200*time.Millisecond),
 		progressbar.OptionSetPredictTime(true),
 		progressbar.OptionSetDescription("正在下载 ["+filepath.Base(file)+"]"),
+		progressbar.OptionOnCompletion(func() {
+			_, _ = c.lockedWriter().Write([]byte("\n"))
+		}),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "=",
 			SaucerHead:    ">",
@@ -560,21 +622,6 @@ func (c *Client) newRawDownloadProgressBar(size int64, file string) *progressbar
 			BarEnd:        "]",
 		}),
 	)
-}
-
-func (c *Client) newConcurrentProgress() *concurrentProgress {
-	if !c.progress || c.concurrency <= 1 {
-		return nil
-	}
-	progress := &concurrentProgress{
-		client: c,
-		events: make(chan progressEvent, c.concurrency*16),
-		done:   make(chan struct{}),
-		files:  make(map[string]*progressState),
-		order:  make([]string, 0, c.concurrency),
-	}
-	go progress.run()
-	return progress
 }
 
 func (c *Client) printf(format string, args ...any) {
@@ -593,26 +640,6 @@ func (c *Client) println(args ...any) {
 	}
 }
 
-func (c *Client) progressPrintf(progress *concurrentProgress, format string, args ...any) {
-	if progress != nil {
-		progress.Print(func() {
-			c.printf(format, args...)
-		})
-		return
-	}
-	c.printf(format, args...)
-}
-
-func (c *Client) progressPrintln(progress *concurrentProgress, args ...any) {
-	if progress != nil {
-		progress.Print(func() {
-			c.println(args...)
-		})
-		return
-	}
-	c.println(args...)
-}
-
 func (c *Client) lockedWriter() io.Writer {
 	return lockedWriter{
 		writer: c.writer,
@@ -625,236 +652,6 @@ func (c *Client) authorize(request *req.Request) *req.Request {
 		return request
 	}
 	return request.SetHeader("Authorization", "Bearer "+c.token)
-}
-
-type concurrentProgress struct {
-	client      *Client
-	events      chan progressEvent
-	done        chan struct{}
-	files       map[string]*progressState
-	order       []string
-	current     string
-	bar         *progressbar.ProgressBar
-	barID       string
-	lastLineLen int
-}
-
-type progressState struct {
-	name     string
-	total    int64
-	current  int64
-	finished bool
-}
-
-func (s *progressState) remaining() int64 {
-	if s == nil || s.total <= 0 {
-		return 1<<63 - 1
-	}
-	remaining := s.total - s.current
-	if remaining < 0 {
-		return 0
-	}
-	return remaining
-}
-
-type progressEvent struct {
-	id       string
-	name     string
-	total    int64
-	current  int64
-	delta    int64
-	set      bool
-	finished bool
-	print    func()
-	done     chan struct{}
-}
-
-func (e progressEvent) shouldRender() bool {
-	return e.finished || e.delta > 0 || e.current > 0
-}
-
-func newConcurrentDownloadReporter(progress *concurrentProgress, size int64, file string) *downloadReporter {
-	if progress == nil || size <= 0 {
-		return nil
-	}
-	id := file
-	name := filepath.Base(file)
-	progress.Send(progressEvent{id: id, name: name, total: size, current: 0, set: true})
-	return &downloadReporter{id: id, progress: progress}
-}
-
-func (p *concurrentProgress) Send(event progressEvent) {
-	select {
-	case p.events <- event:
-	case <-p.done:
-		if event.done != nil {
-			close(event.done)
-		}
-	}
-}
-
-func (p *concurrentProgress) Close() {
-	close(p.events)
-	<-p.done
-}
-
-func (p *concurrentProgress) Print(print func()) {
-	if print == nil {
-		return
-	}
-	done := make(chan struct{})
-	p.Send(progressEvent{print: print, done: done})
-	<-done
-}
-
-func (p *concurrentProgress) run() {
-	defer close(p.done)
-	for event := range p.events {
-		if event.print != nil {
-			p.print(event.print)
-			if event.done != nil {
-				close(event.done)
-			}
-			continue
-		}
-		p.apply(event)
-		if event.shouldRender() {
-			p.render(event.id)
-		}
-	}
-	if p.bar != nil {
-		_ = p.bar.Clear()
-	}
-}
-
-func (p *concurrentProgress) print(print func()) {
-	p.clearRenderedLine()
-	print()
-}
-
-func (p *concurrentProgress) apply(event progressEvent) {
-	state := p.files[event.id]
-	if state == nil {
-		state = &progressState{name: event.name, total: event.total}
-		p.files[event.id] = state
-		p.order = append(p.order, event.id)
-	}
-	if event.name != "" {
-		state.name = event.name
-	}
-	if event.total > 0 {
-		state.total = event.total
-	}
-	if event.set {
-		state.current = event.current
-	}
-	if event.delta > 0 {
-		state.current += event.delta
-	}
-	if state.current > state.total && state.total > 0 {
-		state.current = state.total
-	}
-	if event.finished {
-		state.finished = true
-	}
-}
-
-func (p *concurrentProgress) render(eventID string) {
-	state := p.files[eventID]
-	if p.shouldSwitchTo(eventID, state) {
-		p.selectCurrent()
-	}
-	if p.current == "" {
-		p.clearBar()
-		return
-	}
-
-	currentState := p.files[p.current]
-	if p.bar == nil || p.barID != p.current {
-		p.replaceBar(p.current, currentState)
-	}
-	p.lastLineLen = p.renderedLineLen(currentState)
-	_ = p.bar.Set64(currentState.current)
-}
-
-func (p *concurrentProgress) renderedLineLen(state *progressState) int {
-	if state == nil {
-		return 0
-	}
-	return len([]rune("正在下载 ["+state.name+"]")) + 96
-}
-
-func (p *concurrentProgress) shouldSwitchTo(eventID string, eventState *progressState) bool {
-	if p.current == "" || p.files[p.current] == nil || p.files[p.current].finished {
-		return true
-	}
-	if eventState == nil || eventState.finished || eventID == p.current {
-		return false
-	}
-	current := p.files[p.current]
-	return eventState.remaining() < current.remaining()
-}
-
-func (p *concurrentProgress) replaceBar(id string, state *progressState) {
-	p.clearBar()
-	p.bar = p.client.newRawDownloadProgressBar(state.total, state.name)
-	p.barID = id
-}
-
-func (p *concurrentProgress) clearBar() {
-	if p.bar == nil {
-		return
-	}
-	_ = p.bar.Clear()
-	p.bar = nil
-	p.barID = ""
-	p.lastLineLen = 0
-}
-
-func (p *concurrentProgress) clearRenderedLine() {
-	if p.bar != nil {
-		_ = p.bar.Clear()
-	}
-	if p.lastLineLen > 0 {
-		padding := strings.Repeat(" ", p.lastLineLen)
-		p.client.printf("%s\r", padding)
-	}
-}
-
-func (p *concurrentProgress) selectCurrent() {
-	var selectedID string
-	var selectedState *progressState
-	for _, id := range p.order {
-		state := p.files[id]
-		if state == nil || state.finished {
-			continue
-		}
-		if selectedState == nil || state.remaining() < selectedState.remaining() {
-			selectedID = id
-			selectedState = state
-		}
-	}
-	p.current = selectedID
-}
-
-type downloadReporter struct {
-	id       string
-	progress *concurrentProgress
-}
-
-func (r *downloadReporter) Set(current int64) {
-	r.progress.Send(progressEvent{id: r.id, current: current, set: true})
-}
-
-func (r *downloadReporter) Add(n int) {
-	if n <= 0 {
-		return
-	}
-	r.progress.Send(progressEvent{id: r.id, delta: int64(n)})
-}
-
-func (r *downloadReporter) Finish(success bool) {
-	r.progress.Send(progressEvent{id: r.id, finished: true})
 }
 
 type progressWriter struct {
