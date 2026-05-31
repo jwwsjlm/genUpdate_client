@@ -50,6 +50,12 @@ const (
 	fileDownloaded
 )
 
+type fileOutcome struct {
+	file   File
+	action fileAction
+	err    error
+}
+
 func New(options Options) (*Client, error) {
 	if strings.TrimSpace(options.BaseURL) == "" {
 		return nil, fmt.Errorf("base url is required")
@@ -157,14 +163,12 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 	}
 
 	progress := c.newConcurrentProgress()
-	if progress != nil {
-		defer progress.Close()
-	}
 	c.progressPrintf(progress, "并发下载模式: 共%d 个文件，并发数:%d\n", len(files), workerCount)
 
 	jobs := make(chan File)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	outcomes := make([]fileOutcome, 0, len(files))
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
@@ -174,18 +178,16 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 				if err := ctx.Err(); err != nil {
 					mu.Lock()
 					result.Failed = append(result.Failed, FileError{File: file, Err: err})
-					snapshot := result
+					outcomes = append(outcomes, fileOutcome{file: file, err: err})
 					mu.Unlock()
-					c.printFileResult(progress, snapshot, file, err)
 					continue
 				}
 
 				action, err := c.updateFile(ctx, file, progress)
 				mu.Lock()
 				c.recordFileResult(&result, file, action, err)
-				snapshot := result
+				outcomes = append(outcomes, fileOutcome{file: file, action: action, err: err})
 				mu.Unlock()
-				c.printFileResult(progress, snapshot, file, err)
 			}
 		}()
 	}
@@ -200,6 +202,10 @@ sendJobs:
 	}
 	close(jobs)
 	wg.Wait()
+	if progress != nil {
+		progress.Close()
+	}
+	c.printConcurrentOutcomes(outcomes)
 
 	if len(result.Failed) > 0 {
 		return result, UpdateError{Failures: result.Failed}
@@ -226,6 +232,19 @@ func (c *Client) printFileResult(progress *concurrentProgress, result Result, fi
 	c.progressPrintf(progress, "剩余待更新文件:%d (已下载:%d, 已跳过:%d, 失败:%d)\n", result.remaining(), result.Downloaded, result.Skipped, len(result.Failed))
 }
 
+func (c *Client) printConcurrentOutcomes(outcomes []fileOutcome) {
+	for _, outcome := range outcomes {
+		switch {
+		case outcome.err != nil:
+			c.printf("文件下载失败: %s, 错误: %v\n", outcome.file.Name, outcome.err)
+		case outcome.action == fileDownloaded:
+			c.printf("文件名%s, 下载完成并校验通过\n", outcome.file.Name)
+		default:
+			c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", outcome.file.Name)
+		}
+	}
+}
+
 func (c *Client) updateFile(ctx context.Context, file File, progress *concurrentProgress) (fileAction, error) {
 	downloadURL, err := BuildDownloadURL(c.baseURL, file.DownloadURL)
 	if err != nil {
@@ -236,35 +255,47 @@ func (c *Client) updateFile(ctx context.Context, file File, progress *concurrent
 		return fileSkipped, fmt.Errorf("failed to resolve file path: %w", err)
 	}
 
-	c.progressPrintln(progress, "--------------------------------------------------------------------")
+	if progress == nil {
+		c.println("--------------------------------------------------------------------")
+	}
 	if fileExists(relativePath) {
 		localSize, err := fileSize(relativePath)
 		if err != nil {
-			c.progressPrintf(progress, "读取本地文件大小错误:%s, 重新下载\n", err)
+			if progress == nil {
+				c.printf("读取本地文件大小错误:%s, 重新下载\n", err)
+			}
 		} else if localSize != file.Size {
-			c.progressPrintf(progress, "文件名[%s], 已存在，但大小不一致，准备重新下载\n", file.Name)
+			if progress == nil {
+				c.printf("文件名[%s], 已存在，但大小不一致，准备重新下载\n", file.Name)
+			}
 		} else {
 			sha, err := CalculateFileSHA256(relativePath)
 			if err != nil {
-				c.progressPrintf(progress, "计算 SHA256 错误:%s, 重新下载\n", err)
+				if progress == nil {
+					c.printf("计算 SHA256 错误:%s, 重新下载\n", err)
+				}
 			} else if !strings.EqualFold(sha, file.Sha256) {
-				c.progressPrintf(progress, "文件名[%s], 已存在，但本地和云端不一致，准备重新下载\n", file.Name)
+				if progress == nil {
+					c.printf("文件名[%s], 已存在，但本地和云端不一致，准备重新下载\n", file.Name)
+				}
 			} else {
-				c.progressPrintf(progress, "文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", file.Name)
+				if progress == nil {
+					c.printf("文件名[%s], 已存在，且本地和云端 SHA256 一致，跳过下载\n", file.Name)
+				}
 				return fileSkipped, nil
 			}
 		}
 	}
 
-	actionText := "开始下载文件"
-	if progress != nil {
-		actionText = "准备下载文件"
+	if progress == nil {
+		c.progressPrintf(nil, "开始下载文件[%s]\n文件 SHA256:%s\n文件大小:%s\n", file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
 	}
-	c.progressPrintf(progress, "%s[%s]\n文件 SHA256:%s\n文件大小:%s\n", actionText, file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
 	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256, progress); err != nil {
 		return fileSkipped, err
 	}
-	c.progressPrintf(progress, "\n文件名%s, 下载完成并校验通过\n", file.Name)
+	if progress == nil {
+		c.printf("文件名%s, 下载完成并校验通过\n", file.Name)
+	}
 	return fileDownloaded, nil
 }
 
@@ -781,12 +812,12 @@ func (p *concurrentProgress) clearBar() {
 }
 
 func (p *concurrentProgress) clearRenderedLine() {
-	if p.lastLineLen > 0 {
-		padding := strings.Repeat(" ", p.lastLineLen)
-		p.client.printf("\r%s\r", padding)
-	}
 	if p.bar != nil {
 		_ = p.bar.Clear()
+	}
+	if p.lastLineLen > 0 {
+		padding := strings.Repeat(" ", p.lastLineLen)
+		p.client.printf("%s\r", padding)
 	}
 }
 
