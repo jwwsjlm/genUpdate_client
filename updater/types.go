@@ -32,6 +32,10 @@ type Result struct {
 	Failed     []FileError
 }
 
+func (r Result) remaining() int {
+	return r.Total - r.Downloaded - r.Skipped - len(r.Failed)
+}
+
 type FileError struct {
 	File File
 	Err  error
