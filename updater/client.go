@@ -325,7 +325,7 @@ func (c *Client) downloadToTempSequential(ctx context.Context, downloadURL, tmpF
 
 		writer := io.Writer(out)
 		if bar != nil {
-			writer = io.MultiWriter(out, progressWriter{add: func(n int) { _ = bar.Add(n) }})
+			writer = io.MultiWriter(out, bar)
 		}
 		_, copyErr := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024))
 		closeBodyErr := response.Body.Close()
@@ -379,7 +379,6 @@ func (c *Client) downloadToTempParallel(ctx context.Context, downloadURL, tmpFil
 	partSize := (size + int64(workers) - 1) / int64(workers)
 	errCh := make(chan error, workers)
 	var wg sync.WaitGroup
-	var barMu sync.Mutex
 	for i := 0; i < workers; i++ {
 		start := int64(i) * partSize
 		end := start + partSize - 1
@@ -394,7 +393,7 @@ func (c *Client) downloadToTempParallel(ctx context.Context, downloadURL, tmpFil
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := c.downloadRange(ctx, downloadURL, partFile, start, end, bar, &barMu); err != nil {
+			if err := c.downloadRange(ctx, downloadURL, partFile, start, end, bar); err != nil {
 				cancel()
 				errCh <- err
 			}
@@ -434,7 +433,7 @@ func (c *Client) supportsRange(ctx context.Context, downloadURL string, size int
 	return strings.HasSuffix(contentRange, fmt.Sprintf("/%d", size)), nil
 }
 
-func (c *Client) downloadRange(ctx context.Context, downloadURL, partFile string, start, end int64, bar *progressbar.ProgressBar, barMu *sync.Mutex) error {
+func (c *Client) downloadRange(ctx context.Context, downloadURL, partFile string, start, end int64, bar *progressbar.ProgressBar) error {
 	_ = os.Remove(partFile)
 	request := c.authorize(c.http.R().
 		SetContext(ctx).
@@ -462,11 +461,7 @@ func (c *Client) downloadRange(ctx context.Context, downloadURL, partFile string
 
 	writer := io.Writer(out)
 	if bar != nil {
-		writer = io.MultiWriter(out, progressWriter{add: func(n int) {
-			barMu.Lock()
-			defer barMu.Unlock()
-			_ = bar.Add(n)
-		}})
+		writer = io.MultiWriter(out, bar)
 	}
 	if _, err := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024)); err != nil {
 		return fmt.Errorf("failed to write part file: %w", err)
@@ -605,12 +600,14 @@ func (c *Client) newRawDownloadProgressBar(size int64, file string) *progressbar
 	return progressbar.NewOptions64(size,
 		progressbar.OptionSetWriter(c.lockedWriter()),
 		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowTotalBytes(true),
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetWidth(20),
 		progressbar.OptionSetSpinnerChangeInterval(0),
 		progressbar.OptionThrottle(200*time.Millisecond),
 		progressbar.OptionSetPredictTime(false),
 		progressbar.OptionSetElapsedTime(false),
+		progressbar.OptionSetRenderBlankState(true),
 		progressbar.OptionSetDescription("正在下载 ["+filepath.Base(file)+"]"),
 		progressbar.OptionOnCompletion(func() {
 			_, _ = c.lockedWriter().Write([]byte("\n"))
@@ -653,17 +650,6 @@ func (c *Client) authorize(request *req.Request) *req.Request {
 		return request
 	}
 	return request.SetHeader("Authorization", "Bearer "+c.token)
-}
-
-type progressWriter struct {
-	add func(int)
-}
-
-func (w progressWriter) Write(p []byte) (int, error) {
-	if w.add != nil {
-		w.add(len(p))
-	}
-	return len(p), nil
 }
 
 type lockedWriter struct {
