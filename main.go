@@ -27,6 +27,8 @@ var concurrency int
 
 var version = "dev"
 
+const tokenEnvName = "GENUPDATE_TOKEN"
+
 type clientConfig struct {
 	BaseURL                   string `json:"url"`
 	AppName                   string `json:"name"`
@@ -177,6 +179,9 @@ func applyConfig(path string) error {
 	}
 	if cfg.Token != "" && !flagProvided("token") {
 		updateToken = cfg.Token
+	}
+	if envToken := strings.TrimSpace(os.Getenv(tokenEnvName)); envToken != "" && !flagProvided("token") {
+		updateToken = envToken
 	}
 	if cfg.ProcessName != "" && !flagProvided("process") {
 		targetProcess = cfg.ProcessName

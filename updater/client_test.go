@@ -232,6 +232,20 @@ func TestClientSendsBearerTokenToManifestAndDownload(t *testing.T) {
 	}
 }
 
+func TestNewClampsDownloadConcurrency(t *testing.T) {
+	client, err := New(Options{
+		BaseURL:     "https://updates.example.com",
+		AppName:     "app",
+		Concurrency: MaxDownloadConcurrency + 100,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if client.concurrency != MaxDownloadConcurrency {
+		t.Fatalf("concurrency = %d, want %d", client.concurrency, MaxDownloadConcurrency)
+	}
+}
+
 func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
 	body := []byte("short")
 	expectedSHA := sha256Hex(body)

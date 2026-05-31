@@ -8,9 +8,10 @@
 ## 功能
 
 - 获取服务端更新清单：`/updateList/{appName}`
-- 支持 token 鉴权：`Authorization: Bearer <token>`
+- 支持 token 鉴权：`Authorization: Bearer <token>`，也可用环境变量 `GENUPDATE_TOKEN`
 - 本地文件先比大小，再比 SHA256，未变化则跳过
 - 下载到 `.tmp` 临时文件，校验大小和 SHA256 后再替换目标文件
+- Windows 下替换目标文件失败时会短暂重试，降低临时占用导致的失败概率
 - 支持断点续传，服务端支持 `Range` 时会从 `.tmp` 已下载位置继续
 - 支持单文件多连接下载：`-concurrency` 表示当前文件的分片下载连接数
 - 进度条显示当前文件已下载/总大小和下载速度
@@ -99,7 +100,7 @@ go build -trimpath -ldflags="-s -w" -o genUpdate_client.exe .
 | `-config` | 否 | 配置文件路径；默认尝试读取程序同目录 `genUpdate_client.json` |
 | `-process` | 否 | 更新前等待退出的目标进程名，例如 `yourapp.exe` |
 | `-wait-timeout` | 否 | 等待目标进程退出的最长时间，例如 `2m`；`0` 表示一直等待 |
-| `-concurrency` | 否 | 单个文件的并发下载连接数，默认 `1`；文件本身仍按清单顺序逐个下载 |
+| `-concurrency` | 否 | 单个文件的并发下载连接数，默认 `1`，最大 `16`；文件本身仍按清单顺序逐个下载 |
 | `-y` | 否 | 自动确认更新，不等待用户输入 Y/N |
 | `-no-wait` | 否 | 程序结束后立即退出 |
 | `-no-progress` | 否 | 关闭动态进度条，适合第三方程序调用、日志重定向或不支持动态刷新的终端 |
@@ -138,6 +139,14 @@ Release 压缩包内会附带 `genUpdate_client.example.json`。可以把它复�
 ```
 
 命令行参数优先级更高，会覆盖配置文件中的同名设置。
+
+token 也可以通过环境变量传入，避免把 token 写进配置文件：
+
+```bash
+GENUPDATE_TOKEN=your-token ./genUpdate_client -url http://localhost:8090 -name 星月 -y -no-wait
+```
+
+token 优先级为：命令行 `-token` > 环境变量 `GENUPDATE_TOKEN` > 配置文件 `token`。
 
 ## 作为 Go 库使用
 
@@ -264,7 +273,7 @@ result, err := client.Update(context.Background(), manifest)
 - 大文件下载使用流式复制，不会把文件整体读入内存
 - SHA256 使用流式计算
 - 本地文件先比较大小，大小不一致时不再计算 SHA256
-- `-concurrency` 可以提升单个大文件的下载速度，前提是服务端支持 `Range`
+- `-concurrency` 可以提升单个大文件的下载速度，前提是服务端支持 `Range`；最大值会限制为 `16`
 - 多个文件不会同时下载，输出更清晰，也减少日志交错
 
 ## 发布新版本
@@ -305,7 +314,7 @@ Release 包会通过 GoReleaser 把 tag 版本注入到二进制里，例如 `0.
 
 ### 并发越高越好吗
 
-不一定。`-concurrency` 表示单个文件同时使用多少个 Range 连接下载，不是同时下载多少个文件。一般建议从 `2` 或 `3` 开始；服务端不支持 `Range` 时会自动回退为单连接下载。多个文件始终按清单顺序处理，所以终端里只会出现当前文件的一条进度。
+不一定。`-concurrency` 表示单个文件同时使用多少个 Range 连接下载，不是同时下载多少个文件。一般建议从 `2` 或 `3` 开始，最大值会限制为 `16`；服务端不支持 `Range` 时会自动回退为单连接下载。多个文件始终按清单顺序处理，所以终端里只会出现当前文件的一条进度。
 
 ### 进度条停在 50% 是卡死了吗
 

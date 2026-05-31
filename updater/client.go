@@ -30,6 +30,8 @@ type Options struct {
 	Progress           bool
 }
 
+const MaxDownloadConcurrency = 16
+
 type Client struct {
 	baseURL            string
 	appName            string
@@ -67,6 +69,9 @@ func New(options Options) (*Client, error) {
 	concurrency := options.Concurrency
 	if concurrency < 1 {
 		concurrency = 1
+	}
+	if concurrency > MaxDownloadConcurrency {
+		concurrency = MaxDownloadConcurrency
 	}
 
 	return &Client{
@@ -683,12 +688,26 @@ func fileSize(path string) (int64, error) {
 }
 
 func replaceFile(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := os.Rename(src, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
 
-	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
-		return err
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			lastErr = err
+		} else if err := os.Rename(src, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		time.Sleep(time.Duration(attempt+1) * 150 * time.Millisecond)
 	}
-	return os.Rename(src, dst)
+	if lastErr == nil {
+		return fmt.Errorf("failed to replace file")
+	}
+	return lastErr
 }
