@@ -17,8 +17,6 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/imroc/req/v3"
 	"github.com/schollz/progressbar/v3"
-	"github.com/vbauerster/mpb/v8"
-	"github.com/vbauerster/mpb/v8/decor"
 )
 
 type Options struct {
@@ -138,7 +136,7 @@ func (c *Client) Update(ctx context.Context, manifest Manifest) (Result, error) 
 			return result, err
 		}
 
-		action, err := c.updateFile(ctx, file, nil)
+		action, err := c.updateFile(ctx, file, false)
 		if err != nil {
 			result.Failed = append(result.Failed, FileError{File: file, Err: err})
 			c.printf("文件下载失败: %s, 错误: %v\n", file.Name, err)
@@ -171,10 +169,7 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 		workerCount = 1
 	}
 
-	progress := c.newConcurrentProgress()
-	if progress != nil {
-		defer progress.Wait()
-	}
+	concurrentProgress := c.progress && c.concurrency > 1
 
 	jobs := make(chan File)
 	var wg sync.WaitGroup
@@ -192,7 +187,7 @@ func (c *Client) updateConcurrent(ctx context.Context, files []File, result Resu
 					continue
 				}
 
-				action, err := c.updateFile(ctx, file, progress)
+				action, err := c.updateFile(ctx, file, concurrentProgress)
 				mu.Lock()
 				if err != nil {
 					result.Failed = append(result.Failed, FileError{File: file, Err: err})
@@ -226,7 +221,7 @@ sendJobs:
 	return result, ctx.Err()
 }
 
-func (c *Client) updateFile(ctx context.Context, file File, progress *mpb.Progress) (fileAction, error) {
+func (c *Client) updateFile(ctx context.Context, file File, concurrentProgress bool) (fileAction, error) {
 	downloadURL, err := BuildDownloadURL(c.baseURL, file.DownloadURL)
 	if err != nil {
 		return fileSkipped, err
@@ -257,14 +252,14 @@ func (c *Client) updateFile(ctx context.Context, file File, progress *mpb.Progre
 	}
 
 	c.printf("开始下载文件[%s]\n文件 SHA256:%s\n文件大小:%s\n", file.Name, file.Sha256, humanize.Bytes(uint64(file.Size)))
-	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256, progress); err != nil {
+	if err := c.downloadFile(ctx, downloadURL, relativePath, file.Size, file.Sha256, concurrentProgress); err != nil {
 		return fileSkipped, err
 	}
 	c.printf("\n文件名%s, 下载完成并校验通过\n", file.Name)
 	return fileDownloaded, nil
 }
 
-func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string, progress *mpb.Progress) (err error) {
+func (c *Client) downloadFile(ctx context.Context, url, file string, size int64, expectedSHA256 string, concurrentProgress bool) (err error) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
@@ -281,7 +276,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 			return fmt.Errorf("invalid sha256 checksum %q: %w", expectedSHA256, err)
 		}
 	}
-	if err := c.downloadToTemp(ctx, url, tmpFile, size, file, progress); err != nil {
+	if err := c.downloadToTemp(ctx, url, tmpFile, size, file, concurrentProgress); err != nil {
 		return err
 	}
 
@@ -307,7 +302,7 @@ func (c *Client) downloadFile(ctx context.Context, url, file string, size int64,
 	return nil
 }
 
-func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string, progress *mpb.Progress) (err error) {
+func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string, size int64, targetFile string, concurrentProgress bool) (err error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		offset := int64(0)
 		if info, statErr := os.Stat(tmpFile); statErr == nil {
@@ -323,7 +318,7 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		}
 
 		bar := c.newDownloadProgressBar(size, targetFile)
-		mpbBar := c.newConcurrentDownloadBar(progress, size, targetFile)
+		reporter := c.newConcurrentDownloadReporter(size, targetFile, concurrentProgress)
 		if bar != nil {
 			_ = bar.Set64(offset)
 			defer func() {
@@ -331,14 +326,10 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 					err = fmt.Errorf("failed to finish progress bar: %w", cerr)
 				}
 			}()
-		} else if mpbBar != nil {
-			mpbBar.SetCurrent(offset)
+		} else if reporter != nil {
+			reporter.Set(offset)
 			defer func() {
-				if err != nil {
-					mpbBar.Abort(false)
-					return
-				}
-				mpbBar.SetTotal(size, true)
+				reporter.Finish(err == nil)
 			}()
 		}
 
@@ -367,8 +358,8 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 			_ = os.Remove(tmpFile)
 			if bar != nil {
 				_ = bar.Set64(0)
-			} else if mpbBar != nil {
-				mpbBar.SetCurrent(0)
+			} else if reporter != nil {
+				reporter.Set(0)
 			}
 		}
 		if offset > 0 && response.StatusCode != http.StatusPartialContent {
@@ -395,8 +386,8 @@ func (c *Client) downloadToTemp(ctx context.Context, downloadURL, tmpFile string
 		writer := io.Writer(out)
 		if bar != nil {
 			writer = io.MultiWriter(out, progressWriter{add: func(n int) { _ = bar.Add(n) }})
-		} else if mpbBar != nil {
-			writer = io.MultiWriter(out, progressWriter{add: mpbBar.IncrBy})
+		} else if reporter != nil {
+			writer = io.MultiWriter(out, progressWriter{add: reporter.Add})
 		}
 		_, copyErr := io.CopyBuffer(writer, response.Body, make([]byte, 1024*1024))
 		closeBodyErr := response.Body.Close()
@@ -522,41 +513,17 @@ func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.Pr
 	)
 }
 
-func (c *Client) newConcurrentProgress() *mpb.Progress {
-	if !c.progress || c.concurrency <= 1 {
+func (c *Client) newConcurrentDownloadReporter(size int64, file string, enabled bool) *downloadReporter {
+	if !enabled || size <= 0 {
 		return nil
 	}
-	return mpb.New(
-		mpb.WithOutput(c.lockedWriter()),
-		mpb.WithWidth(100),
-	)
-}
-
-func (c *Client) newConcurrentDownloadBar(progress *mpb.Progress, size int64, file string) *mpb.Bar {
-	if progress == nil || size <= 0 {
-		return nil
+	return &downloadReporter{
+		name:      filepath.Base(file),
+		total:     size,
+		startedAt: time.Now(),
+		lastShown: time.Time{},
+		print:     c.printf,
 	}
-
-	name := filepath.Base(file)
-	if len([]rune(name)) > 32 {
-		name = string([]rune(name)[:29]) + "..."
-	}
-
-	return progress.New(size,
-		mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding(" ").Rbound("]"),
-		mpb.BarWidth(20),
-		mpb.PrependDecorators(
-			decor.Name("下载 ["+name+"] ", decor.WCSyncSpace),
-			decor.Percentage(decor.WCSyncSpace),
-		),
-		mpb.AppendDecorators(
-			decor.CountersKiloByte(" % .1f / % .1f", decor.WCSyncSpace),
-			decor.Name(" "),
-			decor.AverageSpeed(decor.SizeB1000(0), "% .1f/s", decor.WCSyncSpace),
-			decor.Name(" ETA "),
-			decor.AverageETA(decor.ET_STYLE_GO, decor.WCSyncSpace),
-		),
-	)
 }
 
 func (c *Client) printf(format string, args ...any) {
@@ -587,6 +554,125 @@ func (c *Client) authorize(request *req.Request) *req.Request {
 		return request
 	}
 	return request.SetHeader("Authorization", "Bearer "+c.token)
+}
+
+type downloadReporter struct {
+	mu        sync.Mutex
+	name      string
+	total     int64
+	current   int64
+	base      int64
+	startedAt time.Time
+	lastShown time.Time
+	print     func(format string, args ...any)
+}
+
+func (r *downloadReporter) Set(current int64) {
+	r.mu.Lock()
+	r.current = current
+	r.base = current
+	r.startedAt = time.Now()
+	r.lastShown = time.Time{}
+	r.mu.Unlock()
+	r.show(false, false)
+}
+
+func (r *downloadReporter) Add(n int) {
+	if n <= 0 {
+		return
+	}
+
+	r.mu.Lock()
+	r.current += int64(n)
+	current := r.current
+	shouldShow := time.Since(r.lastShown) >= time.Second || current >= r.total
+	r.mu.Unlock()
+
+	if shouldShow {
+		r.show(false, false)
+	}
+}
+
+func (r *downloadReporter) Finish(success bool) {
+	r.show(true, success)
+}
+
+func (r *downloadReporter) show(final bool, success bool) {
+	r.mu.Lock()
+	now := time.Now()
+	if !final && !r.lastShown.IsZero() && now.Sub(r.lastShown) < time.Second {
+		r.mu.Unlock()
+		return
+	}
+	if !final {
+		r.lastShown = now
+	}
+	name := r.name
+	current := r.current
+	base := r.base
+	total := r.total
+	startedAt := r.startedAt
+	r.mu.Unlock()
+
+	if current > total {
+		current = total
+	}
+	percent := float64(current) / float64(total)
+	speed := downloadSpeed(current-base, startedAt)
+	eta := downloadETA(total-current, speed)
+	status := ""
+	if final {
+		if success {
+			status = " 完成"
+		} else {
+			status = " 中断"
+		}
+	}
+	r.print("下载进度[%s]: %s/%s %3.0f%% [%s] %s/s ETA %s%s\n",
+		name,
+		humanize.Bytes(uint64(current)),
+		humanize.Bytes(uint64(total)),
+		percent*100,
+		progressLine(percent, 20),
+		humanize.Bytes(uint64(speed)),
+		eta,
+		status,
+	)
+}
+
+func progressLine(percent float64, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 1 {
+		percent = 1
+	}
+	if width < 1 {
+		width = 1
+	}
+	filled := int(percent * float64(width))
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("=", filled) + strings.Repeat(" ", width-filled)
+}
+
+func downloadSpeed(current int64, startedAt time.Time) uint64 {
+	elapsed := time.Since(startedAt).Seconds()
+	if elapsed <= 0 || current <= 0 {
+		return 0
+	}
+	return uint64(float64(current) / elapsed)
+}
+
+func downloadETA(remaining int64, speed uint64) string {
+	if remaining <= 0 {
+		return "0s"
+	}
+	if speed == 0 {
+		return "--"
+	}
+	return (time.Duration(float64(remaining)/float64(speed)) * time.Second).Truncate(time.Second).String()
 }
 
 type progressWriter struct {

@@ -241,7 +241,7 @@ func TestDownloadFileRejectsSizeMismatch(t *testing.T) {
 	}
 
 	target := filepath.Join(t.TempDir(), "payload.bin")
-	err = client.downloadFile(context.Background(), server.URL, target, int64(len(body)+1), expectedSHA, nil)
+	err = client.downloadFile(context.Background(), server.URL, target, int64(len(body)+1), expectedSHA, false)
 	if err == nil {
 		t.Fatalf("downloadFile returned nil error")
 	}
@@ -282,7 +282,7 @@ func TestDownloadFileResumesPartialTemporaryFile(t *testing.T) {
 	if err := os.WriteFile(target+".tmp", body[:offset], 0o644); err != nil {
 		t.Fatalf("failed to write temporary file: %v", err)
 	}
-	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA, nil); err != nil {
+	if err := client.downloadFile(context.Background(), server.URL, target, int64(len(body)), expectedSHA, false); err != nil {
 		t.Fatalf("downloadFile returned error: %v", err)
 	}
 
