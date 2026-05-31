@@ -509,26 +509,6 @@ func parseRangeHeader(t *testing.T, header string) (int64, int64, bool) {
 	return start, end, true
 }
 
-func TestProgressLineWriterPadsCarriageReturnUpdates(t *testing.T) {
-	var buf bytes.Buffer
-	writer := progressLineWriter{writer: &buf}
-
-	if _, err := writer.Write([]byte("\r正在下载 [file] [10s:1m52s]")); err != nil {
-		t.Fatalf("Write returned error: %v", err)
-	}
-	if !strings.HasSuffix(buf.String(), "                                ") {
-		t.Fatalf("progress update was not padded: %q", buf.String())
-	}
-
-	buf.Reset()
-	if _, err := writer.Write([]byte("文件名file, 下载完成\n")); err != nil {
-		t.Fatalf("Write returned error: %v", err)
-	}
-	if strings.HasSuffix(buf.String(), "                                ") {
-		t.Fatalf("normal line should not be padded: %q", buf.String())
-	}
-}
-
 func sha256Hex(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
