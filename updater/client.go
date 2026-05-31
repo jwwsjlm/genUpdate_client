@@ -603,7 +603,7 @@ func (c *Client) newDownloadProgressBar(size int64, file string) *progressbar.Pr
 
 func (c *Client) newRawDownloadProgressBar(size int64, file string) *progressbar.ProgressBar {
 	return progressbar.NewOptions64(size,
-		progressbar.OptionSetWriter(c.lockedWriter()),
+		progressbar.OptionSetWriter(progressLineWriter{writer: c.lockedWriter()}),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionShowCount(),
 		progressbar.OptionSetWidth(20),
@@ -661,6 +661,28 @@ type progressWriter struct {
 func (w progressWriter) Write(p []byte) (int, error) {
 	if w.add != nil {
 		w.add(len(p))
+	}
+	return len(p), nil
+}
+
+type progressLineWriter struct {
+	writer io.Writer
+}
+
+func (w progressLineWriter) Write(p []byte) (int, error) {
+	if w.writer == nil {
+		return len(p), nil
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if _, err := w.writer.Write(p); err != nil {
+		return 0, err
+	}
+	if p[0] == '\r' && p[len(p)-1] != '\n' {
+		if _, err := w.writer.Write([]byte("                                ")); err != nil {
+			return 0, err
+		}
 	}
 	return len(p), nil
 }
