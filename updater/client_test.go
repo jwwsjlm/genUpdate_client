@@ -344,6 +344,22 @@ func TestConcurrentProgressPrioritizesNearestCompletion(t *testing.T) {
 	}
 }
 
+func TestConcurrentProgressDoesNotRenderInitialZeroState(t *testing.T) {
+	event := progressEvent{id: "file", name: "file.bin", total: 100, current: 0, set: true}
+	if event.shouldRender() {
+		t.Fatalf("initial zero progress event should not render")
+	}
+	if !(progressEvent{id: "file", delta: 1}).shouldRender() {
+		t.Fatalf("delta progress event should render")
+	}
+	if !(progressEvent{id: "file", current: 10, set: true}).shouldRender() {
+		t.Fatalf("resumed progress event should render")
+	}
+	if !(progressEvent{id: "file", finished: true}).shouldRender() {
+		t.Fatalf("finished progress event should render")
+	}
+}
+
 func TestConcurrentDownloadReporterFinishesOnceAcrossRangeRetry(t *testing.T) {
 	client, err := New(Options{
 		BaseURL:     "https://updates.example.com",

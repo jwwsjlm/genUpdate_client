@@ -637,6 +637,10 @@ type progressEvent struct {
 	done     chan struct{}
 }
 
+func (e progressEvent) shouldRender() bool {
+	return e.finished || e.delta > 0 || e.current > 0
+}
+
 func newConcurrentDownloadReporter(progress *concurrentProgress, size int64, file string) *downloadReporter {
 	if progress == nil || size <= 0 {
 		return nil
@@ -682,7 +686,9 @@ func (p *concurrentProgress) run() {
 			continue
 		}
 		p.apply(event)
-		p.render(event.id)
+		if event.shouldRender() {
+			p.render(event.id)
+		}
 	}
 	if p.bar != nil {
 		_ = p.bar.Clear()
