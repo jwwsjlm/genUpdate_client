@@ -597,14 +597,15 @@ func (c *Client) authorize(request *req.Request) *req.Request {
 }
 
 type concurrentProgress struct {
-	client  *Client
-	events  chan progressEvent
-	done    chan struct{}
-	files   map[string]*progressState
-	order   []string
-	current string
-	bar     *progressbar.ProgressBar
-	barID   string
+	client      *Client
+	events      chan progressEvent
+	done        chan struct{}
+	files       map[string]*progressState
+	order       []string
+	current     string
+	bar         *progressbar.ProgressBar
+	barID       string
+	lastLineLen int
 }
 
 type progressState struct {
@@ -696,9 +697,7 @@ func (p *concurrentProgress) run() {
 }
 
 func (p *concurrentProgress) print(print func()) {
-	if p.bar != nil {
-		_ = p.bar.Clear()
-	}
+	p.clearRenderedLine()
 	print()
 }
 
@@ -743,7 +742,15 @@ func (p *concurrentProgress) render(eventID string) {
 	if p.bar == nil || p.barID != p.current {
 		p.replaceBar(p.current, currentState)
 	}
+	p.lastLineLen = p.renderedLineLen(currentState)
 	_ = p.bar.Set64(currentState.current)
+}
+
+func (p *concurrentProgress) renderedLineLen(state *progressState) int {
+	if state == nil {
+		return 0
+	}
+	return len([]rune("正在下载 ["+state.name+"]")) + 96
 }
 
 func (p *concurrentProgress) shouldSwitchTo(eventID string, eventState *progressState) bool {
@@ -770,6 +777,17 @@ func (p *concurrentProgress) clearBar() {
 	_ = p.bar.Clear()
 	p.bar = nil
 	p.barID = ""
+	p.lastLineLen = 0
+}
+
+func (p *concurrentProgress) clearRenderedLine() {
+	if p.lastLineLen > 0 {
+		padding := strings.Repeat(" ", p.lastLineLen)
+		p.client.printf("\r%s\r", padding)
+	}
+	if p.bar != nil {
+		_ = p.bar.Clear()
+	}
 }
 
 func (p *concurrentProgress) selectCurrent() {
